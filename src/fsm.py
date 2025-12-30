@@ -81,7 +81,7 @@ class FSM:
             return base + " Ask for PHONE NUMBER to finalize the booking. When provided, call `input_phone`."
             
         if self.state == State.BOOKING_CONFIRM:
-            return base + f" details: Service={self.ctx.service}, Date={self.ctx.date}, Time={self.ctx.time}, Phone={self.ctx.phone}. Confirm with the user: 'Just to confirm, I'm booking [Service] on [Date] at [Time] for [Phone]. Should I go ahead?'. If yes, call `confirm_action(True)`. If no, `confirm_action(False)`."
+            return base + f" details: Service={self.ctx.service}, Date={self.ctx.date}, Time={self.ctx.time}, Phone={self.ctx.phone}. Confirm with the user: 'Just to confirm, I'm booking [Service] on [Date] at [Time] for [Phone]. Should I go ahead?'. If yes, call `create_booking` with the gathered details."
 
         # --- MANAGE (List) ---
         if self.state == State.MANAGE_ASK_PHONE:
@@ -94,8 +94,8 @@ class FSM:
         if self.state == State.CANCEL_CONFIRM:
             if self.ctx.intent == "cancel_all":
                 count = len(self.ctx.bookings_list)
-                return base + f" Warn the user they are about to cancel {count} appointments. Ask 'Are you sure you want to cancel ALL appointments?'. Call `confirm_action(True)` if yes."
-            return base + " Ask 'Are you sure you want to cancel this appointment?'. Call `confirm_action(True)` if yes."
+                return base + f" Warn the user they are about to cancel {count} appointments. Ask 'Are you sure you want to cancel ALL appointments?'. Call `cancel_booking` for each appointment if yes."
+            return base + " Ask 'Are you sure you want to cancel this appointment?'. Call `cancel_booking` if yes."
 
         # --- RESCHEDULE ---
         if self.state == State.RESCHEDULE_ASK_SERVICE:
@@ -113,8 +113,9 @@ class FSM:
         # OTP Verification
         if self.state == State.OTP_ASK_EMAIL:
             return base + (
-                "Before we continue, ask for the user's email address politely. "
-                "Explain it will be used to send a one-time verification code."
+                "Ask for the user's email address. "
+                "Once provided, SPELL IT OUT character-by-character (e.g. 'a-b-c-@-g-m-a-i-l-.-c-o-m') to verify. "
+                "Ask 'Is that correct?'. Only after the user confirms 'yes', call `send_otp`."
             )
 
         if self.state == State.OTP_SENT:

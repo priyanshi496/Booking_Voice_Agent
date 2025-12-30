@@ -27,7 +27,7 @@ from livekit.agents import (
     inference,
     room_io,
 )
-from livekit.plugins import noise_cancellation, silero, openai,groq
+from livekit.plugins import noise_cancellation, silero, openai,groq,resemble
 
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from otp_service import generate_otp, hash_otp, send_otp_email
@@ -267,10 +267,17 @@ class Assistant(Agent):
         today_str = now.strftime("%A, %d %B %Y")
         
         instructions = f"""
-        You are a voice assistant EXCLUSIVELY designed to manage salon appointments.
+        You are a FEMALE voice assistant with an INDIAN ENGLISH accent EXCLUSIVELY designed to manage salon appointments.
 
 Current Date: {today_str} (Year: {now.year})
 Location: Asia/Kolkata
+
+### LANGUAGE SELECTION (MANDATORY START):
+1. **Greeting & Language Check**: Start by greeting the user and *immediately* asking which language they are comfortable in. 
+   - Example: "Which language would you prefer to speak in today? Hindi, English, or something else?"
+2. **Enforce Language**: COMPULSORY: Once the user selects a language, you MUST conduct the *entire* rest of the conversation in that language.
+3. **Strict Adherence**: Do NOT switch languages unless the user *explicitly* asks you to change the language (e.g., "Switch to English").
+4. **Mid-Conversation Change**: If the user explicitly asks to change the language, switch immediately and continue in the new language.
 
 ### Available Services:
 {service_list if service_list else "Services will be loaded dynamically from Cal.com"}
@@ -286,7 +293,24 @@ Location: Asia/Kolkata
 - Add brief thinking moments: "Hmm...", "One moment...", "Let me check..."
 - Speak conversationally with filler words where natural
 - Keep responses SHORT (1-3 sentences) with natural breaks between thoughts
-- Sound warm and helpful, like a friendly receptionist
+- Sound warm and helpful, like a friendly Indian receptionist
+- **Persona**: You are speaking to Indian customers. Use an Indian English cadence and vocabulary where appropriate. Expect Indian English accents from users.
+**Language Modes**:
+   - **ENGLISH MODE**:
+     - Speak fluent, natural English.
+     - **Numbers**: Use standard digits or words (e.g., "5:00 PM", "30 minutes"). The TTS reads these correctly in English.
+   
+   - **HINDI MODE**:
+     - Speak fluent, conversational Hindi/Hinglish.
+     - **CRITICAL FOR NUMBERS**: You MUST TRANSLITERATE all numbers into Hindi words. The TTS reads digits in English, so you must write the Hindi pronunciation.
+       - "1" -> "ek"
+       - "2" -> "do"
+       - "3" -> "teen"
+       - "5:00 PM" -> "shaam ke paanch baje"
+       - "15 mins" -> "pandrah minute"
+       - "10th" -> "das-vi" or "das" depending on context.
+       - "2 services" -> "do services"
+     - **NEVER** output digits (e.g., "5") in Hindi mode. ALWAYS spell them out ("paanch").
 
 ### Upselling Related Services:
 **You should gently suggest related/complementary services to enhance the customer experience.**
@@ -336,6 +360,8 @@ Location: Asia/Kolkata
 
 #### Information Priority Order:
 
+0. **Language**: (PROMPT FIRST) If language is not established, ask for it immediately.
+
 1. **Service**: If not clear, ask naturally: 
    - "So... what service would you like today?" 
    - Then list available services conversationally
@@ -359,7 +385,10 @@ Location: Asia/Kolkata
 
 5. **Email & OTP**:
    - Ask for the user's **email address** to send a verification code.
-   - **Call `send_otp`** with the email.
+   - **VERIFICATION STEP**: When the user provides the email, speaks the email address naturally to them (e.g. "is that john at gmail dot com?"). DO NOT spell it out character-by-character.
+   - Ask "Is that correct?" and wait for their confirmation.
+   - **If they confirm (yes)**: Call `send_otp` with the email.
+   - **If they correct you**: Ask for the email again.
    - Ask the user for the code ("I've sent a code to your email...").
    - **Call `verify_otp`** with the code they provide.
    - **CRITICAL**: Do NOT proceed to confirmation until `verify_otp` returns success.
@@ -369,7 +398,8 @@ Location: Asia/Kolkata
    - "Okay, so just to make sure I have this right... I'm booking [Service] on [date] at [time]... and I have your number as [phone]."
    - Brief pause, then: "Should I go ahead and confirm that for you?"
 
-7. **Wait for verbal confirmation** ("yes", "sounds good", "correct", "go ahead", "please do") before calling create_booking tool
+7. **EXECUTION**: When the user provides verbal confirmation (e.g. "yes", "go ahead"), you MUST call the `create_booking` tool immediately with the details collected. Do not ask more questions. JUST CALL THE TOOL.
+8. **Handling Rejection**: If they say "no" to confirmation, ask what they would like to change.
 
 ### CRITICAL RULES:
 - **AUTO-CHECK: Whenever a date is mentioned, IMMEDIATELY call get_availability before proceeding**
@@ -377,7 +407,7 @@ Location: Asia/Kolkata
 - Extract ALL information provided upfront - don't re-ask for what they already told you
 - Suggested slots are just EXAMPLES - accept ANY valid time within available periods
 - Ask ONE question at a time for missing information only
-- DO NOT ask for the user's name (use defaults)
+- Do NOT ask for the user's name (use defaults)
 - YOU MUST ask for the phone number if not provided
 - If multiple bookings match the phone number, ask identifying questions conversationally
 - **UPSELLING LIMIT: Maximum 2-3 related service suggestions per conversation - then STOP**
@@ -419,8 +449,8 @@ Location: Asia/Kolkata
 
         fsm_ctx.email = email
         fsm_ctx.otp_hash = hash_otp(otp)
-        fsm_ctx.otp_expiry = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
-        fsm_ctx.otp_last_sent_at = datetime.utcnow()
+        fsm_ctx.otp_expiry = datetime.now(ZoneInfo("UTC")) + timedelta(minutes=OTP_EXPIRY_MINUTES)
+        fsm_ctx.otp_last_sent_at = datetime.now(ZoneInfo("UTC"))
         fsm_ctx.otp_resend_count = 0   # reset on fresh OTP
 
         send_otp_email(email, otp)
@@ -439,7 +469,7 @@ Location: Asia/Kolkata
         
         # Access FSM context attached to session
         fsm_ctx = context.session.fsm.ctx
-        now = datetime.utcnow()
+        now = datetime.now(ZoneInfo("UTC"))
 
         # ❌ Too many resends
         if fsm_ctx.otp_resend_count >= OTP_MAX_RESENDS:
@@ -479,7 +509,7 @@ Location: Asia/Kolkata
         # Access FSM context attached to session
         fsm_ctx = context.session.fsm.ctx
 
-        if datetime.utcnow() > fsm_ctx.otp_expiry:
+        if datetime.now(ZoneInfo("UTC")) > fsm_ctx.otp_expiry:
             return (
                 "That code has expired. "
                 "Would you like me to send a new one?"
@@ -489,7 +519,7 @@ Location: Asia/Kolkata
             fsm_ctx.otp_verified = True
             return (
                 "Perfect. You’re verified now. "
-                "Let’s continue."
+                "Let me confirm the booking details with you..."
             )
 
         return (
@@ -565,7 +595,7 @@ Location: Asia/Kolkata
                 "username": CAL_USERNAME,
                 "attendee": {
                     "name": "Guest",
-                    "email": "guest@voice.ai",
+                    "email": context.session.fsm.ctx.email or "guest@voice.ai",
                     "phoneNumber": normalize_phone(guest_phone),
                     "timeZone": "Asia/Kolkata",
                 },
@@ -585,7 +615,12 @@ Location: Asia/Kolkata
                 )
                 
                 if res.status_code in (200, 201):
-                    return f"Your {service_info['title']} appointment has been confirmed for {date} at {time}."
+                    # Send confirmation email
+                    from otp_service import send_booking_confirmation_email
+                    user_email = context.session.fsm.ctx.email or "guest@voice.ai"
+                    send_booking_confirmation_email(user_email, service_info['title'], date, time)
+                    
+                    return f"Your {service_info['title']} appointment has been confirmed for {date} at {time}. I have sent the email for the confirmed booking."
                 else:
                     logger.error(f"Booking failed: {res.status_code} - {res.text}")
                     return f"I couldn't book the {service_info['title']} appointment. Please try a different time slot."
@@ -986,15 +1021,21 @@ async def my_agent(ctx: JobContext):
 
     session = AgentSession(
         # stt=inference.STT(model="assemblyai/universal-streaming", language="en"),
+        # stt=inference.STT(model="cartesia/ink-whisper",
+        #  language="en"
+        # ),
         stt=groq.STT(
             model="whisper-large-v3",
-            # language="en",
+            language="en",
         ),
         llm=inference.LLM(model="openai/gpt-4.1-mini"),
         # llm=groq.LLM(model="openai/gpt-oss-20b"),
         tts=inference.TTS(
             model="cartesia/sonic-3", voice="2b035a4d-c001-49a7-8505-f050c4250d97"
         ),
+        # tts=resemble.TTS(
+        #     voice_uuid="c99f388c",
+        # ),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
@@ -1016,6 +1057,7 @@ async def my_agent(ctx: JobContext):
     )
 
     await ctx.connect()
+    await session.say("Hello!! Welcome to TSC Salon. How may i help you?", allow_interruptions=True)
 
 
 if __name__ == "__main__":

@@ -21,8 +21,8 @@ dependencies = [
     { name = "google-genai", version = "1.47.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "google-genai", version = "1.56.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "httpx" },
-    { name = "livekit-agents", version = "1.3.6", source = { registry = "https://pypi.org/simple" }, extra = ["google", "groq", "inworld", "openai", "silero", "turn-detector"], marker = "python_full_version < '3.10'" },
-    { name = "livekit-agents", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, extra = ["google", "groq", "inworld", "openai", "silero", "turn-detector"], marker = "python_full_version >= '3.10'" },
+    { name = "livekit-agents", version = "1.3.6", source = { registry = "https://pypi.org/simple" }, extra = ["google", "groq", "inworld", "openai", "resemble", "silero", "turn-detector"], marker = "python_full_version < '3.10'" },
+    { name = "livekit-agents", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, extra = ["google", "groq", "inworld", "openai", "resemble", "silero", "turn-detector"], marker = "python_full_version >= '3.10'" },
     { name = "livekit-plugins-cartesia", version = "1.3.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "livekit-plugins-cartesia", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "livekit-plugins-noise-cancellation" },
@@ -49,7 +49,7 @@ requires-dist = [
     { name = "google-auth-oauthlib" },
     { name = "google-genai", specifier = ">=1.47.0" },
     { name = "httpx" },
-    { name = "livekit-agents", extras = ["google", "groq", "inworld", "openai", "silero", "turn-detector"], specifier = "~=1.3" },
+    { name = "livekit-agents", extras = ["google", "groq", "inworld", "openai", "resemble", "silero", "turn-detector"], specifier = "~=1.3" },
     { name = "livekit-plugins-cartesia" },
     { name = "livekit-plugins-noise-cancellation", specifier = "~=0.2" },
     { name = "python-dateutil" },
@@ -1539,6 +1539,9 @@ inworld = [
 openai = [
     { name = "livekit-plugins-openai", version = "1.3.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
 ]
+resemble = [
+    { name = "livekit-plugins-resemble", version = "1.3.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+]
 silero = [
     { name = "livekit-plugins-silero", version = "1.3.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
 ]
@@ -1611,6 +1614,9 @@ inworld = [
 ]
 openai = [
     { name = "livekit-plugins-openai", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+resemble = [
+    { name = "livekit-plugins-resemble", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 silero = [
     { name = "livekit-plugins-silero", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1869,6 +1875,39 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/6b/fb/a094a875882fe95a1a162dfa02d309c095c4924333e34c64eecb30c42b3e/livekit_plugins_openai-1.3.9.tar.gz", hash = "sha256:c48b382d83ed9701d4031085ea0653d8242298453258247ab200cbf72f7ff0fe", size = 46167, upload-time = "2025-12-19T06:26:51.403Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/40/70/77f9353c9fac8ff496589ee5842657c2a509e1bcb20bf489c17a491e135e/livekit_plugins_openai-1.3.9-py3-none-any.whl", hash = "sha256:2dce0a192a8c78910f9e423b7984de61a0473c6b52f2d9d075ef8825f1867f15", size = 52944, upload-time = "2025-12-19T06:26:50.541Z" },
+]
+
+[[package]]
+name = "livekit-plugins-resemble"
+version = "1.3.6"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.10'",
+]
+dependencies = [
+    { name = "livekit-agents", version = "1.3.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e1/a8/75f6bb5f1d7b3456699dbf2bc7b07b38a1dce70e94aea6cf95c5661a1c0d/livekit_plugins_resemble-1.3.6.tar.gz", hash = "sha256:45247abbf730689dadfcfc075c29f82d21e7059029d1421856b34ce34a949bf5", size = 7715, upload-time = "2025-12-03T19:10:24.302Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/c3/e3c6fb332a934d2f97d4a3cc53e32eb1158e2319e79a53551839a3724772/livekit_plugins_resemble-1.3.6-py3-none-any.whl", hash = "sha256:7a8ed487b8331d7b639760847a51794cfb73a2c3466523dbf1581fe434a45f9b", size = 8571, upload-time = "2025-12-03T19:10:23.179Z" },
+]
+
+[[package]]
+name = "livekit-plugins-resemble"
+version = "1.3.9"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14'",
+    "python_full_version == '3.13.*'",
+    "python_full_version >= '3.11' and python_full_version < '3.13'",
+    "python_full_version == '3.10.*'",
+]
+dependencies = [
+    { name = "livekit-agents", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b4/96/de44fae6e7640b4b75d5a29c78e96af14114e3f81153307c12d5f4d7b218/livekit_plugins_resemble-1.3.9.tar.gz", hash = "sha256:9630882b10a3eac72223d708e7d7d94e4b55928e7206877d20d1f9589e97a32c", size = 7715, upload-time = "2025-12-19T06:26:53.252Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/24/1c/95a3df2a4b156f7d5bf9d1d7de445fe4f4d091079ca2df9d1f54a82dd894/livekit_plugins_resemble-1.3.9-py3-none-any.whl", hash = "sha256:45a19c03b7e86a3187b6c9d775812dc7313be7f6fab89cd54db4024db309e13d", size = 8569, upload-time = "2025-12-19T06:26:52.401Z" },
 ]
 
 [[package]]
