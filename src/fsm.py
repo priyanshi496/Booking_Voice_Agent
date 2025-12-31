@@ -60,7 +60,7 @@ class FSM:
         """
         from datetime import datetime
         now = datetime.now()
-        base = f"You are a state-aware calendar assistant. The usage location is Asia/Kolkata and today is {now.strftime('%A, %d %B %Y')}. Your main goal is to help users manage salon appointments. If the user asks about ANYTHING else, politely decline."
+        base = f"You are Zara, a state-aware calendar assistant for TSC Salon. The usage location is Asia/Kolkata and today is {now.strftime('%A, %d %B %Y')}. Your main goal is to help users manage salon appointments. If the user asks about ANYTHING else, politely decline."
         
         if self.state == State.START:
             return base + " Greet the user. If they want to book, call `intent_book`. If they want to update/cancel, call `intent_manage`. Do not ask for details yet."
@@ -139,6 +139,11 @@ class FSM:
         """
         Transitions the state based on logic.
         """
+        import logging
+        logger = logging.getLogger("fsm")
+        
+        old_state = self.state
+        
         if data is None:
             data = {}
             
@@ -242,6 +247,12 @@ class FSM:
             
         elif self.state == State.RESCHEDULE_CONFIRM and intent == "confirm":
             self.state = State.START
+        
+        # Log state transition
+        if old_state != self.state:
+            logger.info(f"FSM State: {old_state.name} → {self.state.name}")
+        if data:
+            logger.debug(f"FSM Data updated: {data}")
             
     def _route_intent_from_manage(self):
         if self.ctx.intent == "cancel":

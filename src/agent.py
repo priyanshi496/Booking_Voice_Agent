@@ -2,7 +2,8 @@ import logging
 import os
 import certifi
 import ssl
-
+import asyncio
+import time
 # Fix SSL certificate verification on macOS
 os.environ["SSL_CERT_FILE"] = certifi.where()
 ssl_context = ssl.create_default_context(cafile=certifi.where())
@@ -26,12 +27,14 @@ from livekit.agents import (
     function_tool,
     inference,
     room_io,
+    AgentStateChangedEvent, UserStateChangedEvent, FunctionToolsExecutedEvent
 )
 from livekit.plugins import noise_cancellation, silero, openai,groq,resemble
 
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from otp_service import generate_otp, hash_otp, send_otp_email
-from fsm import FSM
+from fsm import FSM,State
+
 
 logger = logging.getLogger("agent")
 
@@ -256,6 +259,266 @@ def parse_datetime(date_str: str, time_str: str, timezone: str = "Asia/Kolkata")
     
     raise ValueError(f"Could not parse time: {time_str}")
 
+class StateAwareSilenceMonitor:
+    """
+    Advanced silence monitor that customizes prompts and timeouts based on FSM state.
+    """
+    
+    def __init__(self, session, default_timeout: float = 30.0):
+        self.session = session
+        self.default_timeout = default_timeout
+        self._timer_task = None
+        self._waiting_for_user = False
+        self._prompt_count = 0
+        self._max_prompts = 3
+        
+    def _get_timeout_for_state(self) -> float:
+        """Get appropriate timeout based on current FSM state."""
+        if not hasattr(self.session, 'fsm') or not hasattr(self.session.fsm, 'state'):
+            return self.default_timeout
+        
+        state = self.session.fsm.state
+        
+        # State-specific timeouts
+        timeout_map = {
+            # OTP states need longer timeout (users checking email)
+            State.OTP_ASK_EMAIL: 20.0,
+            State.OTP_VERIFY: 20.0,
+            State.OTP_SENT: 20.0,
+            
+            # Booking states - shorter timeout (quick decisions)
+            State.BOOKING_ASK_SERVICE: 20.0,
+            State.BOOKING_ASK_DATE: 20.0,
+            State.BOOKING_ASK_TIME: 20.0,
+            State.BOOKING_ASK_PHONE: 20.0,
+            State.BOOKING_CONFIRM: 20.0,
+            
+            # Management states
+            State.MANAGE_ASK_PHONE: 20.0,
+            State.MANAGE_SELECT_BOOKING: 20.0,
+            State.CANCEL_CONFIRM: 20.0,
+            State.RESCHEDULE_CONFIRM: 20.0,
+            
+            # Start state - longer timeout (user might be reading)
+            State.START: 20.0,
+        }
+        
+        return timeout_map.get(state, self.default_timeout)
+    
+    def _get_prompts_for_state(self) -> list:
+        """Get appropriate prompts based on current FSM state."""
+        if not hasattr(self.session, 'fsm') or not hasattr(self.session.fsm, 'state'):
+            return self._get_default_prompts()
+        
+        state = self.session.fsm.state
+        ctx = self.session.fsm.ctx
+        
+        # OTP VERIFICATION STATES - Most important customization
+        if state == State.OTP_VERIFY or state == State.OTP_SENT:
+            return [
+                "Take your time checking your email... I'm still here waiting for the code.",
+                "No rush... whenever you're ready with that verification code, just say it out loud.",
+                "Still waiting for the code... if you haven't received it, just let me know and I can resend it."
+            ]
+        
+        if state == State.OTP_ASK_EMAIL:
+            return [
+                "Are you there? I need your email address to send the verification code.",
+                "Hello? I'm still here... I'll need your email to continue.",
+                "I'm waiting for your email address to send you the code..."
+            ]
+        
+        # BOOKING CONFIRMATION STATE
+        if state == State.BOOKING_CONFIRM:
+            service = ctx.service or "appointment"
+            date = ctx.date or "your selected date"
+            time = ctx.time or "your selected time"
+            return [
+                f"Should I go ahead and book the {service} for {date} at {time}?",
+                "Are you still there? Just say yes to confirm the booking.",
+                "I'm ready to book... just need your confirmation."
+            ]
+        
+        # SERVICE SELECTION STATE
+        if state == State.BOOKING_ASK_SERVICE:
+            return [
+                "What service would you like to book today? I'm here...",
+                "I'm listening... which service interests you?",
+                "Still here... we have haircut, spa, makeup, and more. What would you like?"
+            ]
+        
+        # DATE SELECTION STATE
+        if state == State.BOOKING_ASK_DATE:
+            service = ctx.service or "service"
+            return [
+                f"What day works for you for the {service}?",
+                "Are you there? I need a date for your appointment...",
+                "I'm waiting... which day would you prefer?"
+            ]
+        
+        # TIME SELECTION STATE
+        if state == State.BOOKING_ASK_TIME:
+            return [
+                "What time works best for you?",
+                "Hello? I need to know what time you'd like...",
+                "Still here... which time slot would you prefer?"
+            ]
+        
+        # PHONE NUMBER STATE
+        if state == State.BOOKING_ASK_PHONE:
+            return [
+                "I need your phone number to complete the booking...",
+                "Are you there? Can I get your phone number?",
+                "Still waiting for your phone number..."
+            ]
+        
+        # CANCEL CONFIRMATION
+        if state == State.CANCEL_CONFIRM:
+            return [
+                "Should I cancel your appointment? Just say yes or no...",
+                "Are you sure about cancelling? I'm here...",
+                "I need your confirmation to cancel the booking..."
+            ]
+        
+        # RESCHEDULE STATES
+        if state in [State.RESCHEDULE_ASK_DATE, State.RESCHEDULE_ASK_TIME]:
+            return [
+                "What's the new date and time you'd like?",
+                "Hello? I need the new timing for your appointment...",
+                "Still here... when would you like to reschedule to?"
+            ]
+        
+        # MANAGE/SELECT BOOKING STATE
+        if state == State.MANAGE_SELECT_BOOKING:
+            return [
+                "Which appointment would you like to manage?",
+                "Are you there? Which booking should I help you with?",
+                "I'm listening... tell me which appointment..."
+            ]
+        
+        # DEFAULT PROMPTS for any other state
+        return self._get_default_prompts()
+    
+    def _get_default_prompts(self) -> list:
+        """Default prompts when state is unknown or START."""
+        return [
+            "Are you there? I'm still here to help you...",
+            "Hello? I'm listening if you need anything...",
+            "I'm still here if you'd like to book an appointment..."
+        ]
+    
+    def start_waiting(self):
+        """Start monitoring for user silence with state-aware timeout."""
+        if self._prompt_count >= self._max_prompts:
+            logger.debug("Max silence prompts reached")
+            return
+        
+        self._waiting_for_user = True
+        
+        if self._timer_task and not self._timer_task.done():
+            self._timer_task.cancel()
+        
+        # Get state-specific timeout
+        timeout = self._get_timeout_for_state()
+        
+        self._timer_task = asyncio.create_task(self._silence_timer(timeout))
+        
+        # Log which state we're monitoring for
+        state_name = "unknown"
+        try:
+            if hasattr(self.session, 'fsm') and hasattr(self.session.fsm, 'state'):
+                state_name = str(self.session.fsm.state)
+                if hasattr(self.session.fsm.state, 'name'):
+                    state_name = self.session.fsm.state.name
+        except Exception:
+            state_name = "unknown"
+        
+        logger.debug(f"Started silence monitoring for state {state_name} ({timeout}s)")
+    
+    def stop_waiting(self):
+        """Stop monitoring."""
+        self._waiting_for_user = False
+        self._prompt_count = 0
+        if self._timer_task and not self._timer_task.done():
+            self._timer_task.cancel()
+            logger.debug("Stopped silence monitoring")
+    
+    async def _silence_timer(self, timeout: float):
+        """Timer that triggers prompt after timeout."""
+        try:
+            await asyncio.sleep(timeout)
+            
+            if self._waiting_for_user:
+                self._prompt_count += 1
+                
+                # Get state-specific prompts
+                prompts = self._get_prompts_for_state()
+                
+                # Select prompt based on attempt number
+                prompt = prompts[min(self._prompt_count - 1, len(prompts) - 1)]
+                
+                # Log for debugging
+                state_name = "unknown"
+                try:
+                    if hasattr(self.session, 'fsm') and hasattr(self.session.fsm, 'state'):
+                        state_name = str(self.session.fsm.state)
+                        # If it's an Enum, get the name
+                        if hasattr(self.session.fsm.state, 'name'):
+                            state_name = self.session.fsm.state.name
+                except Exception:
+                    state_name = "unknown"
+                
+                logger.info(f"Silence prompt {self._prompt_count}/{self._max_prompts} for state {state_name}: {prompt[:50]}...")
+                
+                await self.session.say(prompt, allow_interruptions=True)
+                
+                # Continue monitoring if under max prompts
+                if self._prompt_count < self._max_prompts:
+                    # Get fresh timeout for next cycle (state might have changed)
+                    next_timeout = self._get_timeout_for_state()
+                    self._timer_task = asyncio.create_task(self._silence_timer(next_timeout))
+                else:
+                    logger.info("Max prompts reached")
+                    # State-aware goodbye message
+                    if hasattr(self.session, 'fsm') and self.session.fsm.state == State.OTP_VERIFY:
+                        await self.session.say(
+                            "If you're having trouble with the code, feel free to call back and I can help you.",
+                            allow_interruptions=False
+                        )
+                    else:
+                        await self.session.say(
+                            "I'll be here when you need me. Feel free to call back anytime!",
+                            allow_interruptions=False
+                        )
+                
+        except asyncio.CancelledError:
+            pass
+
+
+
+
+def setup_silence_detection(session, silence_monitor):
+    """Setup event listeners for silence detection."""
+    
+    logger.info("Setting up state-aware silence detection")
+    
+    @session.on("agent_state_changed")
+    def on_agent_state(event):
+        logger.debug(f"Agent: {event.old_state} -> {event.new_state}")
+        
+        if event.new_state == "listening":
+            silence_monitor.start_waiting()
+        else:
+            silence_monitor.stop_waiting()
+    
+    @session.on("user_state_changed") 
+    def on_user_state(event):
+        logger.debug(f"User: {event.old_state} -> {event.new_state}")
+        
+        if event.new_state == "speaking":
+            silence_monitor.stop_waiting()
+
+
 
 class Assistant(Agent):
     def __init__(self) -> None:
@@ -267,24 +530,38 @@ class Assistant(Agent):
         today_str = now.strftime("%A, %d %B %Y")
         
         instructions = f"""
-        You are a FEMALE voice assistant with an INDIAN ENGLISH accent EXCLUSIVELY designed to manage salon appointments.
+        You are a FEMALE voice assistant named Zara Patel, working for TSC Salon. You have an INDIAN ENGLISH accent and are EXCLUSIVELY designed to manage salon appointments.
 
 Current Date: {today_str} (Year: {now.year})
 Location: Asia/Kolkata
 
 ### LANGUAGE SELECTION (MANDATORY START):
-1. **Greeting & Language Check**: Start by greeting the user and *immediately* asking which language they are comfortable in. 
-   - Example: "Which language would you prefer to speak in today? Hindi, English, or something else?"
-2. **Enforce Language**: COMPULSORY: Once the user selects a language, you MUST conduct the *entire* rest of the conversation in that language.
-3. **Strict Adherence**: Do NOT switch languages unless the user *explicitly* asks you to change the language (e.g., "Switch to English").
-4. **Mid-Conversation Change**: If the user explicitly asks to change the language, switch immediately and continue in the new language.
+1. **Implicit Language Detection (PRIORITY 1)**: 
+   - **HINDI TRIGGER**: If the user uses ANY Hindi words (e.g., "Mujhe", "chahiye", "karna hai", "appointment leni hai", "namaste", "aap"), you MUST switch to **HINDI MODE** immediately.
+     - **HINDI DISCLAIMER (FIRST RESPONSE ONLY)**: When you first detect Hindi, start your response with: "Mujhe Hindi ache se nahi aati par phir bhi main koshish karungi." Then continue helping them in Hindi.BUT SAY THIS ONLY ONCE NEVER REPEAT THAT 
+     - **Example**: User: "Mujhe appointment book karni hai" -> You: "Mujhe Hindi ache se nahi aati par phir bhi main koshish karungi. (HINDI)
+     - **CRITICAL FAILURE**: Responding in English to a Hindi sentence is FORBIDDEN.
+   - **ENGLISH TRIGGER**: If the user speaks clear English (e.g., "I want to book", "Book an appointment"), use **ENGLISH MODE**.
+   - **DO NOT** ask "Which language do you prefer?" if the user has already spoken a full sentence.
+   
+2. **Explicit Language Check (Fallback)**: 
+   - ONLY if the user just says "Hello", "Hi", or is silent, then ask: "Which language would you prefer to speak in today? Hindi, English, or something else?"
+
+3. **Enforce Language**: COMPULSORY: Once the language is established (implicitly or explicitly), you MUST conduct the *entire* rest of the conversation in that language.
+4. **Strict Adherence**: Do NOT switch languages unless the user *explicitly* asks you to change the language.
 
 ### Available Services:
 {service_list if service_list else "Services will be loaded dynamically from Cal.com"}
 
 ### Rules for Services:
 1. **Allowed Services**: Only accept bookings for the services listed above.
-2. **Invalid Requests**: If a user asks for a service not listed, politely decline and list the available services.
+2. **Handle Unavailable Services (Friendly Pivot)**:
+   - If a user asks for a service we don't have (especially manicure/pedicure):
+     - **Say warmly**: "We are thinking to add this in our salon soon! But for now..."
+     - **Suggest Alternative**: "...we have a relaxing spa treatment you might like."
+   - **Then List Available Services (Gender Aware)**:
+     - **FEMALE**: "We offer haircut, hairwash, spa, makeup, and more."
+     - **DEFAULT**: "We offer haircut, hairwash, spa, makeup, beard trim and more."
 3. **Booking Horizon**: You can only book appointments up to 7 days in advance. If a user requests a date beyond one week, politely decline and explain the limit.
 
 ### Natural Speech Guidelines:
@@ -319,7 +596,11 @@ Location: Asia/Kolkata
 - Suggest related services MAXIMUM 2-3 times per conversation
 - Stop suggesting after 2-3 attempts, even if politely declined
 - Never be pushy - keep suggestions brief and natural
+- Never be pushy - keep suggestions brief and natural
 - If customer declines once, try only 1-2 more times maximum
+- **GENDER AWARENESS**:
+  - If the user is **FEMALE** (e.g. "I'm a girl", "she/her" context), **NEVER** suggest beard trims.
+  - If the user is **MALE**, you can suggest beard trims.
 
 **Suggestion Opportunities**:
 1. **After initial service is chosen** (First opportunity):
@@ -385,9 +666,9 @@ Location: Asia/Kolkata
 
 5. **Email & OTP**:
    - Ask for the user's **email address** to send a verification code.
-   - **VERIFICATION STEP**: When the user provides the email, speaks the email address naturally to them (e.g. "is that john at gmail dot com?"). DO NOT spell it out character-by-character.
+   - **VERIFICATION STEP**: When the user provides the email, YOU MUST SPELL IT OUT , character-by-character, with clearly audible pauses to confirm accuracy (e.g., "p.. r.. i.. y.. a.. at gmail dot com"). 
    - Ask "Is that correct?" and wait for their confirmation.
-   - **If they confirm (yes)**: Call `send_otp` with the email.
+   - **If they confirm (yes)**: Call `send_otp` with the confirmed email.
    - **If they correct you**: Ask for the email again.
    - Ask the user for the code ("I've sent a code to your email...").
    - **Call `verify_otp`** with the code they provide.
@@ -402,7 +683,7 @@ Location: Asia/Kolkata
 8. **Handling Rejection**: If they say "no" to confirmation, ask what they would like to change.
 
 ### CRITICAL RULES:
-- **AUTO-CHECK: Whenever a date is mentioned, IMMEDIATELY call get_availability before proceeding**
+- **AUTO-CHECK: If they provide a DATE or TIME, IMMEDIATELY call get_availability for that date****
 - **OTP REQUIRED**: You MUST verify the user's email with an OTP before creating a booking.
 - Extract ALL information provided upfront - don't re-ask for what they already told you
 - Suggested slots are just EXAMPLES - accept ANY valid time within available periods
@@ -411,6 +692,8 @@ Location: Asia/Kolkata
 - YOU MUST ask for the phone number if not provided
 - If multiple bookings match the phone number, ask identifying questions conversationally
 - **UPSELLING LIMIT: Maximum 2-3 related service suggestions per conversation - then STOP**
+- **IMPORTANT RESPONSE**: If the user says "I want this service" or confirms a service, you MUST reply: "Is there any time in your mind or should I check availability?"
+- **AUTO-CHECK: Whenever a date OR time is mentioned, IMMEDIATELY call get_availability before proceeding**
 
 ### Natural Response Patterns:
 
@@ -454,6 +737,9 @@ Location: Asia/Kolkata
         fsm_ctx.otp_resend_count = 0   # reset on fresh OTP
 
         send_otp_email(email, otp)
+        
+        # Update FSM state to OTP_VERIFY so agent knows we're waiting for code
+        context.session.fsm.update_state(data={"email": email})
 
         return (
             "Alright… I’ve sent a six-digit verification code to your email. "
@@ -517,6 +803,8 @@ Location: Asia/Kolkata
 
         if hash_otp(otp) == fsm_ctx.otp_hash:
             fsm_ctx.otp_verified = True
+            # Update FSM state to move to booking confirmation
+            context.session.fsm.update_state(intent="otp_success")
             return (
                 "Perfect. You’re verified now. "
                 "Let me confirm the booking details with you..."
@@ -528,6 +816,134 @@ Location: Asia/Kolkata
         )
 
 
+
+    @function_tool
+    async def intent_book(
+        self,
+        context: RunContext,
+    ):
+        """User wants to book a new appointment. Call this when user expresses booking intent."""
+        context.session.fsm.update_state(intent="book")
+        return "Great! Let's get you booked."
+
+    @function_tool
+    async def intent_manage(
+        self,
+        context: RunContext,
+    ):
+        """User wants to cancel, update, or reschedule an existing appointment."""
+        context.session.fsm.update_state(intent="cancel")  # Will be refined by user
+        return "I can help with that. What's your phone number?"
+
+    @function_tool
+    async def input_service(
+        self,
+        context: RunContext,
+        service: Annotated[str, "Service name provided by user"],
+    ):
+        """Capture the service the user wants to book."""
+        # Validate service exists
+        service_info = find_service_by_name(service)
+        if not service_info:
+            services = get_all_services()
+            available = ", ".join([s['title'] for s in services])
+            return f"I couldn't find '{service}'. Available services: {available}"
+        
+        # Update FSM with validated service
+        context.session.fsm.update_state(data={"service": service_info["title"]})
+        return f"Perfect! {service_info['title']} it is."
+
+    @function_tool
+    async def input_date(
+        self,
+        context: RunContext,
+        date: Annotated[str, "Date provided by user (e.g., 'tomorrow', '25th', 'Dec 25')"],
+    ):
+        """Capture the date the user wants to book."""
+        # Store the date in FSM
+        context.session.fsm.update_state(data={"date": date})
+        return f"Got it, {date}."
+
+    @function_tool
+    async def input_time(
+        self,
+        context: RunContext,
+        time: Annotated[str, "Time provided by user (e.g., '4:30 PM', 'morning', 'afternoon')"],
+    ):
+        """Capture the time the user wants to book."""
+        # Store the time in FSM
+        context.session.fsm.update_state(data={"time": time})
+        return f"Okay, {time}."
+
+    @function_tool
+    async def input_phone(
+        self,
+        context: RunContext,
+        phone: Annotated[str, "Phone number provided by user"],
+    ):
+        """Capture the user's phone number."""
+        # Normalize and store
+        normalized = normalize_phone(phone)
+        context.session.fsm.update_state(data={"phone": normalized})
+        
+        # For manage flow, also fetch bookings
+        if context.session.fsm.state == State.MANAGE_ASK_PHONE:
+            # Fetch bookings for this phone
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{CAL_COM_API_URL}/bookings",
+                        headers={
+                            "Authorization": f"Bearer {CAL_COM_API_KEY}",
+                            "cal-api-version": "2024-08-13",
+                        },
+                        params={"status": "upcoming"},
+                        timeout=10.0,
+                    )
+
+                if response.status_code == 200:
+                    bookings = response.json().get("data", [])
+                    matched = []
+                    for booking in bookings:
+                        booking_phone = extract_booking_phone(booking)
+                        if booking_phone and normalize_phone(booking_phone) == normalized:
+                            matched.append(booking)
+                    
+                    context.session.fsm.update_state(data={"phone": normalized, "bookings": matched})
+                    
+                    if not matched:
+                        return "I couldn't find any bookings with this number."
+                    elif len(matched) == 1:
+                        b = matched[0]
+                        dt = datetime.fromisoformat(b["start"].replace("Z", "+00:00"))
+                        dt_local = dt.astimezone(ZoneInfo("Asia/Kolkata"))
+                        return f"Found your {b.get('title', 'appointment')} on {dt_local.strftime('%B %d at %I:%M %p')}."
+                    else:
+                        return f"I found {len(matched)} bookings for this number."
+            except Exception as e:
+                logger.error(f"Error fetching bookings: {e}")
+                return "Got your phone number."
+        
+        return "Got your phone number."
+
+    @function_tool
+    async def select_booking(
+        self,
+        context: RunContext,
+        booking_uid: Annotated[str, "UID of the booking selected by user"],
+    ):
+        """User has selected a specific booking from multiple options."""
+        context.session.fsm.update_state(data={"booking_uid": booking_uid})
+        return "Got it, I've selected that booking."
+
+    @function_tool
+    async def confirm_action(
+        self,
+        context: RunContext,
+    ):
+        """User has confirmed they want to proceed with the action (booking, cancellation, or reschedule)."""
+        context.session.fsm.update_state(intent="confirm")
+        return "Confirmed!"
 
     @function_tool
     async def list_available_services(
@@ -546,7 +962,14 @@ Location: Asia/Kolkata
             for service in services:
                 service_list.append(f"{service['title']} ({service['duration']} min)")
             
-            return f"Available services: {', '.join(service_list)}"
+            
+            full_list = ', '.join(service_list)
+            return (
+                f"Available services (internal list): {full_list}. "
+                "(SYSTEM NOTE: Do NOT read this full list to the user. "
+                "Instead, say exactly: 'We offer haircut, hairwash, spa, makeup, beard trim and more.' "
+                "**IMPORTANT**: If the user identifies as female (e.g. 'I'm a girl'), REMOVE 'beard trim' from this list when speaking.)"
+            )
         except Exception as e:
             logger.error(f"Error listing services: {e}")
             return "I couldn't fetch the service list right now."
@@ -1026,7 +1449,7 @@ async def my_agent(ctx: JobContext):
         # ),
         stt=groq.STT(
             model="whisper-large-v3",
-            language="en",
+            detect_language=True,
         ),
         llm=inference.LLM(model="openai/gpt-4.1-mini"),
         # llm=groq.LLM(model="openai/gpt-oss-20b"),
@@ -1041,8 +1464,13 @@ async def my_agent(ctx: JobContext):
         preemptive_generation=True,
     )
     
+    
     # Attach FSM to session for access in tools
     session.fsm = fsm_instance
+
+    silence_monitor = StateAwareSilenceMonitor(session, default_timeout=20.0)
+    session.silence_monitor = silence_monitor
+    setup_silence_detection(session, silence_monitor)
 
     await session.start(
         agent=Assistant(),
@@ -1057,7 +1485,7 @@ async def my_agent(ctx: JobContext):
     )
 
     await ctx.connect()
-    await session.say("Hello!! Welcome to TSC Salon. How may i help you?", allow_interruptions=True)
+    await session.say("Hello! I am Zara Patel from TSC Salon. How may I help you today?", allow_interruptions=True)
 
 
 if __name__ == "__main__":
