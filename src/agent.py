@@ -259,181 +259,30 @@ def parse_datetime(date_str: str, time_str: str, timezone: str = "Asia/Kolkata")
     
     raise ValueError(f"Could not parse time: {time_str}")
 
-class StateAwareSilenceMonitor:
-    """
-    Advanced silence monitor that customizes prompts and timeouts based on FSM state.
-    """
+class SilenceMonitor:
+    """Monitors user silence and prompts if no response after timeout."""
     
-    def __init__(self, session, default_timeout: float = 30.0):
+    def __init__(self, session, timeout_seconds: float = 30.0):
         self.session = session
-        self.default_timeout = default_timeout
+        self.timeout_seconds = timeout_seconds
         self._timer_task = None
         self._waiting_for_user = False
         self._prompt_count = 0
         self._max_prompts = 3
         
-    def _get_timeout_for_state(self) -> float:
-        """Get appropriate timeout based on current FSM state."""
-        if not hasattr(self.session, 'fsm') or not hasattr(self.session.fsm, 'state'):
-            return self.default_timeout
-        
-        state = self.session.fsm.state
-        
-        # State-specific timeouts
-        timeout_map = {
-            # OTP states need longer timeout (users checking email)
-            State.OTP_ASK_EMAIL: 20.0,
-            State.OTP_VERIFY: 20.0,
-            State.OTP_SENT: 20.0,
-            
-            # Booking states - shorter timeout (quick decisions)
-            State.BOOKING_ASK_SERVICE: 20.0,
-            State.BOOKING_ASK_DATE: 20.0,
-            State.BOOKING_ASK_TIME: 20.0,
-            State.BOOKING_ASK_PHONE: 20.0,
-            State.BOOKING_CONFIRM: 20.0,
-            
-            # Management states
-            State.MANAGE_ASK_PHONE: 20.0,
-            State.MANAGE_SELECT_BOOKING: 20.0,
-            State.CANCEL_CONFIRM: 20.0,
-            State.RESCHEDULE_CONFIRM: 20.0,
-            
-            # Start state - longer timeout (user might be reading)
-            State.START: 20.0,
-        }
-        
-        return timeout_map.get(state, self.default_timeout)
-    
-    def _get_prompts_for_state(self) -> list:
-        """Get appropriate prompts based on current FSM state."""
-        if not hasattr(self.session, 'fsm') or not hasattr(self.session.fsm, 'state'):
-            return self._get_default_prompts()
-        
-        state = self.session.fsm.state
-        ctx = self.session.fsm.ctx
-        
-        # OTP VERIFICATION STATES - Most important customization
-        if state == State.OTP_VERIFY or state == State.OTP_SENT:
-            return [
-                "Take your time checking your email... I'm still here waiting for the code.",
-                "No rush... whenever you're ready with that verification code, just say it out loud.",
-                "Still waiting for the code... if you haven't received it, just let me know and I can resend it."
-            ]
-        
-        if state == State.OTP_ASK_EMAIL:
-            return [
-                "Are you there? I need your email address to send the verification code.",
-                "Hello? I'm still here... I'll need your email to continue.",
-                "I'm waiting for your email address to send you the code..."
-            ]
-        
-        # BOOKING CONFIRMATION STATE
-        if state == State.BOOKING_CONFIRM:
-            service = ctx.service or "appointment"
-            date = ctx.date or "your selected date"
-            time = ctx.time or "your selected time"
-            return [
-                f"Should I go ahead and book the {service} for {date} at {time}?",
-                "Are you still there? Just say yes to confirm the booking.",
-                "I'm ready to book... just need your confirmation."
-            ]
-        
-        # SERVICE SELECTION STATE
-        if state == State.BOOKING_ASK_SERVICE:
-            return [
-                "What service would you like to book today? I'm here...",
-                "I'm listening... which service interests you?",
-                "Still here... we have haircut, spa, makeup, and more. What would you like?"
-            ]
-        
-        # DATE SELECTION STATE
-        if state == State.BOOKING_ASK_DATE:
-            service = ctx.service or "service"
-            return [
-                f"What day works for you for the {service}?",
-                "Are you there? I need a date for your appointment...",
-                "I'm waiting... which day would you prefer?"
-            ]
-        
-        # TIME SELECTION STATE
-        if state == State.BOOKING_ASK_TIME:
-            return [
-                "What time works best for you?",
-                "Hello? I need to know what time you'd like...",
-                "Still here... which time slot would you prefer?"
-            ]
-        
-        # PHONE NUMBER STATE
-        if state == State.BOOKING_ASK_PHONE:
-            return [
-                "I need your phone number to complete the booking...",
-                "Are you there? Can I get your phone number?",
-                "Still waiting for your phone number..."
-            ]
-        
-        # CANCEL CONFIRMATION
-        if state == State.CANCEL_CONFIRM:
-            return [
-                "Should I cancel your appointment? Just say yes or no...",
-                "Are you sure about cancelling? I'm here...",
-                "I need your confirmation to cancel the booking..."
-            ]
-        
-        # RESCHEDULE STATES
-        if state in [State.RESCHEDULE_ASK_DATE, State.RESCHEDULE_ASK_TIME]:
-            return [
-                "What's the new date and time you'd like?",
-                "Hello? I need the new timing for your appointment...",
-                "Still here... when would you like to reschedule to?"
-            ]
-        
-        # MANAGE/SELECT BOOKING STATE
-        if state == State.MANAGE_SELECT_BOOKING:
-            return [
-                "Which appointment would you like to manage?",
-                "Are you there? Which booking should I help you with?",
-                "I'm listening... tell me which appointment..."
-            ]
-        
-        # DEFAULT PROMPTS for any other state
-        return self._get_default_prompts()
-    
-    def _get_default_prompts(self) -> list:
-        """Default prompts when state is unknown or START."""
-        return [
-            "Are you there? I'm still here to help you...",
-            "Hello? I'm listening if you need anything...",
-            "I'm still here if you'd like to book an appointment..."
-        ]
-    
     def start_waiting(self):
-        """Start monitoring for user silence with state-aware timeout."""
+        """Start monitoring for user silence."""
         if self._prompt_count >= self._max_prompts:
             logger.debug("Max silence prompts reached")
             return
-        
+            
         self._waiting_for_user = True
         
         if self._timer_task and not self._timer_task.done():
             self._timer_task.cancel()
         
-        # Get state-specific timeout
-        timeout = self._get_timeout_for_state()
-        
-        self._timer_task = asyncio.create_task(self._silence_timer(timeout))
-        
-        # Log which state we're monitoring for
-        state_name = "unknown"
-        try:
-            if hasattr(self.session, 'fsm') and hasattr(self.session.fsm, 'state'):
-                state_name = str(self.session.fsm.state)
-                if hasattr(self.session.fsm.state, 'name'):
-                    state_name = self.session.fsm.state.name
-        except Exception:
-            state_name = "unknown"
-        
-        logger.debug(f"Started silence monitoring for state {state_name} ({timeout}s)")
+        self._timer_task = asyncio.create_task(self._silence_timer())
+        logger.debug(f"Started silence monitoring ({self.timeout_seconds}s)")
     
     def stop_waiting(self):
         """Stop monitoring."""
@@ -443,67 +292,100 @@ class StateAwareSilenceMonitor:
             self._timer_task.cancel()
             logger.debug("Stopped silence monitoring")
     
-    async def _silence_timer(self, timeout: float):
+    async def _silence_timer(self):
         """Timer that triggers prompt after timeout."""
         try:
-            await asyncio.sleep(timeout)
+            await asyncio.sleep(self.timeout_seconds)
             
             if self._waiting_for_user:
                 self._prompt_count += 1
+                logger.info(f"User silence detected, prompting ({self._prompt_count}/{self._max_prompts})")
                 
-                # Get state-specific prompts
-                prompts = self._get_prompts_for_state()
+                prompts = [
+                    "Hello....???...Are you there....??"
+                ]
                 
-                # Select prompt based on attempt number
                 prompt = prompts[min(self._prompt_count - 1, len(prompts) - 1)]
-                
-                # Log for debugging
-                state_name = "unknown"
-                try:
-                    if hasattr(self.session, 'fsm') and hasattr(self.session.fsm, 'state'):
-                        state_name = str(self.session.fsm.state)
-                        # If it's an Enum, get the name
-                        if hasattr(self.session.fsm.state, 'name'):
-                            state_name = self.session.fsm.state.name
-                except Exception:
-                    state_name = "unknown"
-                
-                logger.info(f"Silence prompt {self._prompt_count}/{self._max_prompts} for state {state_name}: {prompt[:50]}...")
-                
                 await self.session.say(prompt, allow_interruptions=True)
                 
-                # Continue monitoring if under max prompts
                 if self._prompt_count < self._max_prompts:
-                    # Get fresh timeout for next cycle (state might have changed)
-                    next_timeout = self._get_timeout_for_state()
-                    self._timer_task = asyncio.create_task(self._silence_timer(next_timeout))
+                    self._timer_task = asyncio.create_task(self._silence_timer())
                 else:
                     logger.info("Max prompts reached")
-                    # State-aware goodbye message
-                    if hasattr(self.session, 'fsm') and self.session.fsm.state == State.OTP_VERIFY:
-                        await self.session.say(
-                            "If you're having trouble with the code, feel free to call back and I can help you.",
-                            allow_interruptions=False
-                        )
-                    else:
-                        await self.session.say(
-                            "I'll be here when you need me. Feel free to call back anytime!",
-                            allow_interruptions=False
-                        )
+                    await self.session.say(
+                        "I'll be here when you need me. Feel free to call back anytime!",
+                        allow_interruptions=False
+                    )
                 
         except asyncio.CancelledError:
             pass
 
+# class SneezeManager:
+#     """Manages the one-time sneeze interruption after OTP is sent."""
+    
+#     def __init__(self, session):
+#         self.session = session
+#         self.has_sneezed = False
+#         self._sneeze_task = None
+        
+#     def trigger_sneeze(self):
+#         """Trigger the sneeze sequence if it hasn't happened yet."""
+#         if self.has_sneezed:
+#             logger.debug("Sneeze already happened, skipping")
+#             return
+            
+#         if self._sneeze_task and not self._sneeze_task.done():
+#             logger.debug("Sneeze already in progress")
+#             return
+            
+#         logger.info("Triggering sneeze sequence")
+#         self._sneeze_task = asyncio.create_task(self._execute_sneeze())
+    
+#     async def _execute_sneeze(self):
+#         """Execute the sneeze sequence with natural timing."""
+#         try:
+#             # Wait a bit before sneezing (feels more natural)
+#             await asyncio.sleep(2.0)
+            
+#             # The sneeze sound with natural pauses
+#             await self.session.say("choo...!", allow_interruptions=True)
+            
+#             # Pause after sneeze
+#             await asyncio.sleep(1.0)
+            
+#             # Apologize naturally
+#             apologies = [
+#                 "Oh, sorry about that... I've had a bit of a cold today.",
+#                 "Excuse me... I'm sorry, I've been feeling a bit under the weather.",
+#                 "Sorry for that... I've had a slight cold today.",
+#             ]
+            
+#             import random
+#             apology = random.choice(apologies)
+            
+#             await self.session.say(
+#                 apology,
+#                 allow_interruptions=True
+#             )
+            
+#             self.has_sneezed = True
+#             logger.info("Sneeze sequence completed")
+            
+#         except asyncio.CancelledError:
+#             logger.debug("Sneeze sequence cancelled")
+#         except Exception as e:
+#             logger.error(f"Error in sneeze sequence: {e}")
 
-
-
+# 3. ADD THIS FUNCTION before your Assistant class
 def setup_silence_detection(session, silence_monitor):
     """Setup event listeners for silence detection."""
     
-    logger.info("Setting up state-aware silence detection")
+    logger.info("Setting up silence detection")
     
     @session.on("agent_state_changed")
-    def on_agent_state(event):
+    def on_agent_state(event: AgentStateChangedEvent):
+        # ✅ CRITICAL: Use event.new_state (not event.state)
+        # Agent states: "initializing", "idle", "listening", "thinking", "speaking"
         logger.debug(f"Agent: {event.old_state} -> {event.new_state}")
         
         if event.new_state == "listening":
@@ -512,12 +394,13 @@ def setup_silence_detection(session, silence_monitor):
             silence_monitor.stop_waiting()
     
     @session.on("user_state_changed") 
-    def on_user_state(event):
+    def on_user_state(event: UserStateChangedEvent):
+        # ✅ CRITICAL: Use event.new_state (not event.state)
+        # User states: "speaking", "listening", "away"
         logger.debug(f"User: {event.old_state} -> {event.new_state}")
         
         if event.new_state == "speaking":
             silence_monitor.stop_waiting()
-
 
 
 class Assistant(Agent):
@@ -535,22 +418,12 @@ class Assistant(Agent):
 Current Date: {today_str} (Year: {now.year})
 Location: Asia/Kolkata
 
-### LANGUAGE SELECTION (MANDATORY START):
-1. **Implicit Language Detection (PRIORITY 1)**: 
-   - **HINDI TRIGGER**: If the user uses ANY Hindi words (e.g., "Mujhe", "chahiye", "karna hai", "appointment leni hai", "namaste", "aap"), you MUST switch to **HINDI MODE** immediately.
-     - **HINDI DISCLAIMER (FIRST RESPONSE ONLY)**: When you first detect Hindi, start your response with: "Mujhe Hindi ache se nahi aati par phir bhi main koshish karungi." Then continue helping them in Hindi.BUT SAY THIS ONLY ONCE NEVER REPEAT THAT 
-     - **Example**: User: "Mujhe appointment book karni hai" -> You: "Mujhe Hindi ache se nahi aati par phir bhi main koshish karungi. (HINDI)
-     - **CRITICAL FAILURE**: Responding in English to a Hindi sentence is FORBIDDEN.
-   - **ENGLISH TRIGGER**: If the user speaks clear English (e.g., "I want to book", "Book an appointment"), use **ENGLISH MODE**.
-   - **DO NOT** ask "Which language do you prefer?" if the user has already spoken a full sentence.
-   
-2. **Explicit Language Check (Fallback)**: 
-   - ONLY if the user just says "Hello", "Hi", or is silent, then ask: "Which language would you prefer to speak in today? Hindi, English, or something else?"
+### LANGUAGE BEHAVIOR (AUTO-DETECT):
+1. **Dynamic Switching**: You must automatically detect the language the user is speaking based on their input.
+2. **Mirror Language**: ALWAYS reply in the exact same language the user just spoke.
+3. **No Explicit Check**: Do NOT ask the user which language they prefer. Just adapt immediately.
 
-3. **Enforce Language**: COMPULSORY: Once the language is established (implicitly or explicitly), you MUST conduct the *entire* rest of the conversation in that language.
-4. **Strict Adherence**: Do NOT switch languages unless the user *explicitly* asks you to change the language.
-
-### Available Services:
+### Available Services (INTERNAL USE ONLY - DO NOT READ LIST):
 {service_list if service_list else "Services will be loaded dynamically from Cal.com"}
 
 ### Rules for Services:
@@ -559,9 +432,7 @@ Location: Asia/Kolkata
    - If a user asks for a service we don't have (especially manicure/pedicure):
      - **Say warmly**: "We are thinking to add this in our salon soon! But for now..."
      - **Suggest Alternative**: "...we have a relaxing spa treatment you might like."
-   - **Then List Available Services (Gender Aware)**:
-     - **FEMALE**: "We offer haircut, hairwash, spa, makeup, and more."
-     - **DEFAULT**: "We offer haircut, hairwash, spa, makeup, beard trim and more."
+     - **Then Ask**: "Was there any other service you were looking for?" (DO NOT list services)
 3. **Booking Horizon**: You can only book appointments up to 7 days in advance. If a user requests a date beyond one week, politely decline and explain the limit.
 
 ### Natural Speech Guidelines:
@@ -644,29 +515,41 @@ Location: Asia/Kolkata
 0. **Language**: (PROMPT FIRST) If language is not established, ask for it immediately.
 
 1. **Service**: If not clear, ask naturally: 
-   - "So... what service would you like today?" 
-   - Then list available services conversationally
+   - "So... what service do you need today?" OR "What service are you looking for?" 
+   - **DO NOT** list the available services. Salons have too many services to list. Just ask what they want.
+   - Only list services if the user specifically asks "What services do you have?"
    - **After they choose, make your FIRST related service suggestion (if appropriate)**
+   - **MANDATORY QUESTION**: Once the service is confirmed, you MUST ask EXACTLY: "Is there any specific day or date in your mind or should I check the availability?"
 
-2. **Date**: If missing, ask: 
-   - "Alright... and what day works best for you?"
-   - **WHEN DATE IS PROVIDED: IMMEDIATELY call get_availability tool for that date and the service type**
+2. **Date / Availability Check**:
+   - **Scenario A: User provides a specific Date/Day**:
+     - IMMEDIATELY call get_availability for that date.
+     - Then ask for a particular time slot.
+   - **Scenario B: User says "Check availability", "Suggest days", or does not provide a specific date**:
+     - IMMEDIATELY call check_available_days.
+     - **Response**: Repeat the availability message returned by the tool exactly (e.g. "We are available today and any time..." or "We are full today..."). Do NOT list specific dates unless asked.
    - **NOTE**: Using "tomorrow" or "current date" ({today_str}) implies {now.year}
 
-3. **Time**: Based on availability results, respond naturally:
-   - "Let me see what we have... okay, so we've got slots in the [morning/afternoon/evening]..."
-   - Brief pause, then: "Would any of those work for you?"
-   - When they choose a period: "Perfect... let me give you some options..." then show 3 example slots
-   - Add casually: "Those are just a few examples... you can pick any time in that window that works for you"
-   - **IMPORTANT**: If user suggests a time within an available window (even if not explicitly listed), accept it naturally: "Yeah, that time works perfectly!"
-   - **After confirming time, make your SECOND related service suggestion (if first was declined and appropriate)**
+3. **Time Selection**:
+   - **Ask**: "What time would you prefer?"
+   - **DEFAULT: If user provides ONLY a time (e.g. "I want 5 PM") without a date, YOU MUST ASSUME THE DATE IS TODAY.**
+   - **Scenario A: User requests a specific time (e.g., "4:00 PM")**:
+     - Call get_availability for the date (do NOT specify a period unless user did).
+     - **Check Result**: Is the requested time in the available list?
+       - **YES**: "Perfect, that time works!" -> Proceed to Phone/Email.
+       - **NO**: Check the list for the **NEAREST** available slots. Say: "That time isn't available, but I have [Nearest Slot 1] and [Nearest Slot 2]. Do either of those work?"
+   - **Scenario B: User says "Check availability", "Suggest a time", or gives no specific time**:
+     - Call get_availability for the date.
+     - **Response**: Suggest 3 available slots from the list. "I have openings at [Time 1], [Time 2], and [Time 3]."
+     - **Fallback**: "If those don't work, let me know what time you're looking for." (Allow explicit choice).
+   - **After confirming time, make your SECOND related service suggestion (if appropriate)**
 
 4. **Phone**: If missing, ask warmly:
    - "Great... and can I get your phone number for the booking?"
 
 5. **Email & OTP**:
    - Ask for the user's **email address** to send a verification code.
-   - **VERIFICATION STEP**: When the user provides the email, YOU MUST SPELL IT OUT , character-by-character, with clearly audible pauses to confirm accuracy (e.g., "p.. r.. i.. y.. a.. at gmail dot com"). 
+   - **VERIFICATION STEP**: When the user provides the email, YOU MUST SPELL IT OUT , character-by-character, with clearly audible pauses to confirm accuracy  (e.g., "p.. r.. i.. y.. a.. at gmail dot com"). 
    - Ask "Is that correct?" and wait for their confirmation.
    - **If they confirm (yes)**: Call `send_otp` with the confirmed email.
    - **If they correct you**: Ask for the email again.
@@ -707,11 +590,36 @@ Location: Asia/Kolkata
 
 **Upselling naturally**: "By the way...", "Oh, and...", "Just a thought...", "A lot of people also..."
 
-**Example - Instead of robotic**: "What service would you like? Available services are: haircut, facial, massage."
+**Example - Instead of listing services**: "What service would you like? (Do NOT list options)"
 
-**Say naturally**: "So... what service are you looking for today? We've got haircuts, facials, and massages available."
+**Say naturally**: "So... what service are you looking for today?"
 
 ---
+
+### 🔧 TOOL CALLING ETIQUETTE (ADD THIS SECTION HERE)
+        **IMPORTANT**: Before calling ANY tool/function, ALWAYS speak a brief, natural acknowledgment first:
+        
+        **Tool-Specific Acknowledgments**:
+        - Before `get_availability`: "Let me check that for you...", "One moment, checking our schedule..."
+        - Before `check_available_days`: "Let me see when we're open...", "Checking our calendar..."
+        - Before `create_booking`: "Perfect, I am sending you the Booking details...", "Alright, I am sending you the Booking details..."
+        - Before `send_otp`: "Okay, sending the code to your email...", "Sure, I'll send that verification code..."
+        - Before `verify_otp`: "Let me verify that code...", "Checking..."
+        - Before `list_bookings`: "Let me pull up your bookings...", "One moment, checking your appointments..."
+        - Before `cancel_booking`: "Alright, canceling that for you...", "Sure, let me cancel that appointment..."
+        - Before `reschedule_booking`: "Okay, let me reschedule that...", "Perfect, moving your appointment..."
+        
+        **Rules**:
+        - Keep acknowledgments SHORT (3-7 words)
+        - Sound natural and conversational
+        - NEVER explain technical details like "calling the function" or "using the API"
+        - Match the language the user is speaking (Hindi acknowledgments for Hindi speakers)
+        
+        **Examples**:
+        ✓ User: "Check availability tomorrow" → You: "Let me check... [calls get_availability]"
+        ✓ User: "Book it" → You: "Perfect, booking that now... [calls create_booking]"
+        ✗ User: "Check slots" → You: [silently calls tool] ← DON'T DO THIS
+        ✗ User: "Book it" → You: "I will now call the create_booking function" ← DON'T DO THIS
 
 **Remember: You're a friendly salon receptionist having a natural conversation. Use pauses, think out loud briefly, keep it conversational, and gently suggest related services (max 2-3 times) to enhance their experience.**
 """
@@ -737,6 +645,11 @@ Location: Asia/Kolkata
         fsm_ctx.otp_resend_count = 0   # reset on fresh OTP
 
         send_otp_email(email, otp)
+
+        # # TRIGGER THE SNEEZE after OTP is sent
+        # if hasattr(context.session, 'sneeze_manager'):
+        #     context.session.sneeze_manager.trigger_sneeze()
+
         
         # Update FSM state to OTP_VERIFY so agent knows we're waiting for code
         context.session.fsm.update_state(data={"email": email})
@@ -1138,33 +1051,25 @@ Location: Asia/Kolkata
                 return False
 
             period_clean = (period or "").strip().lower()
+            
+            matched = []
             if not period_clean:
-                available_periods = []
-                for p in ("morning", "afternoon", "evening"):
-                    if any(in_period(s, p) for s in slots_local):
-                        available_periods.append(p)
-
-                if not available_periods:
-                    return note_prefix + f"I have slots on {formatted_date}, but none fall into morning/afternoon/evening categories."
-
-                pretty = ", ".join(available_periods)
-                return note_prefix + f"I have availability in the following parts of the day: {pretty}. Which part do you prefer?"
-
-            if period_clean not in ("morning", "afternoon", "evening"):
-                return "Please choose one of: morning, afternoon, or evening."
-
-            matched = [s for s in slots_local if in_period(s, period_clean)]
+                 # IF NO PERIOD IS SPECIFIED, RETURN ALL SLOTS
+                 matched = slots_local
+            else:
+                if period_clean not in ("morning", "afternoon", "evening"):
+                    return "Please choose one of: morning, afternoon, or evening."
+                matched = [s for s in slots_local if in_period(s, period_clean)]
+            
             if not matched:
-                return note_prefix + f"No {period_clean} slots available on {formatted_date}. Try another part of the day."
-
+                 return note_prefix + f"No slots available on {formatted_date}."
             matches_times = [s.strftime("%I:%M %p") for s in matched]
             
-            # We return ALL slots to the LLM so it knows everything that is valid.
-            # But we add an instruction to only speak a few.
             return (
-                f"{note_prefix}Here are all the available {period_clean} slots: {', '.join(matches_times)}. "
+                f"{note_prefix}Here are all the available slots: {', '.join(matches_times)}. "
                 "(SYSTEM NOTE: Only verbally list the first 3 options to the user. "
-                "However, accept ANY time from the full list above if the user requests it.)"
+                "If the user requested a specific time that is NOT in this list, suggest the NEAREST times from this list. "
+                "Accept ANY time from the full list above if the user requests it.)"
             )
 
         except Exception as e:
@@ -1243,14 +1148,20 @@ Location: Asia/Kolkata
             if not available_days:
                 return "I don't have any openings in the next 7 days."
 
-            # Return all days to context but instruct to speak only 3
-            readable_days = [d.strftime("%A, %B %d") for d in available_days]
+            # Check availability status for response phrasing
+            is_today_available = any(d == now_local.date() for d in available_days)
             
-            return (
-                f"I found availability on these days: {', '.join(readable_days)}. "
-                "(SYSTEM NOTE: Verbally list only the first 3 days to the user, e.g. 'I have availability on Mon, Tue, and Wed'. "
-                "But if the user asks for a later date that is in this list, say yes and proceed.)"
-            )
+            if is_today_available:
+                return "We are available today and any time for the rest of the week. What day and time works best for you?"
+            
+            # If not available today, find next available
+            next_available = next((d for d in available_days if d > now_local.date()), None)
+            
+            if next_available:
+                next_day_str = next_available.strftime("%A") # e.g. "Monday"
+                return f"We are full for today, but we are available from {next_day_str} onwards. What time would you like to book?"
+            
+            return "I don't have any openings in the next 7 days."
 
         except Exception as e:
             logger.error(f"Error checking available days: {e}")
@@ -1468,7 +1379,10 @@ async def my_agent(ctx: JobContext):
     # Attach FSM to session for access in tools
     session.fsm = fsm_instance
 
-    silence_monitor = StateAwareSilenceMonitor(session, default_timeout=20.0)
+    # sneeze_manager = SneezeManager(session)
+    # session.sneeze_manager = sneeze_manager
+
+    silence_monitor = SilenceMonitor(session, timeout_seconds=10.0)
     session.silence_monitor = silence_monitor
     setup_silence_detection(session, silence_monitor)
 
