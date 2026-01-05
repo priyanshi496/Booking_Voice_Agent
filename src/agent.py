@@ -553,7 +553,7 @@ Location: Asia/Kolkata
    - Ask "Is that correct?" and wait for their confirmation.
    - **If they confirm (yes)**: Call `send_otp` with the confirmed email.
    - **If they correct you**: Ask for the email again.
-   - Ask the user for the code ("I've sent a code to your email...").
+   - Ask the user for the code ("I've sent a code to your email..."). 
    - **Call `verify_otp`** with the code they provide.
    - **CRITICAL**: Do NOT proceed to confirmation until `verify_otp` returns success.
 
