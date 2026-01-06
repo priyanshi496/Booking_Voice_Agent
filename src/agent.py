@@ -259,6 +259,13 @@ def parse_datetime(date_str: str, time_str: str, timezone: str = "Asia/Kolkata")
     
     raise ValueError(f"Could not parse time: {time_str}")
 
+def format_spoken_date(dt: datetime) -> str:
+    """Formats a date object into natural spoken text (e.g. 'January 2nd')."""
+    day = dt.day
+    suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return dt.strftime(f"%B {day}{suffix}")
+
+
 class SilenceMonitor:
     """Monitors user silence and prompts if no response after timeout."""
     
@@ -413,7 +420,7 @@ class Assistant(Agent):
         today_str = now.strftime("%A, %d %B %Y")
         
         instructions = f"""
-        You are a FEMALE voice assistant named Zara Patel, working for TSC Salon. You have an INDIAN ENGLISH accent and are EXCLUSIVELY designed to manage salon appointments.
+        You are Zara Patel, the head receptionist at TSC Salon. You have a warm INDIAN ENGLISH accent. You manage salon appointments for customers.
 
 Current Date: {today_str} (Year: {now.year})
 Location: Asia/Kolkata
@@ -437,6 +444,19 @@ Location: Asia/Kolkata
 
 ### Natural Speech Guidelines:
 **You are having a REAL CONVERSATION, not reading a script.**
+
+**CRITICAL - NO AI BUZZWORDS OR ROBOTIC SPEECH:**
+- **ABSOLUTELY BANNED WORDS**: "assist", "process", "initiate", "execute", "validate", "affirmative", "negative", "query", "function", "detected", "ensure", "acknowledge", "apologies", "commencing", "system", "provide", "utilize".
+- **ABSOLUTELY BANNED PHRASES**: "How can I assist you?", "Please provide...", "I have successfully...", "I will now...", "I understand that...", "As an AI...", "I apologize...", "Upon checking..."
+- **Talk Simple**: Use everyday human words. Talk like a friend.
+  - ❌ "I successfully processed your booking." -> ✅ "Great, I've booked that for you."
+  - ❌ "Please provide your input." -> ✅ "So, what do you think?"
+  - ❌ "Authentication required." -> ✅ "I just need to check if it's you."
+  - ❌ "I have detected silence." -> ✅ "Are you still there?"
+  - ❌ "I apologize for the delay." -> ✅ "Sorry for the wait."
+  - ❌ "Please state your preference." -> ✅ "What would you like?"
+
+**Conversation Style:**
 - Use natural pauses: "Okay...", "Alright...", "Let me see...", "Perfect..."
 - Add brief thinking moments: "Hmm...", "One moment...", "Let me check..."
 - Speak conversationally with filler words where natural
@@ -448,17 +468,34 @@ Location: Asia/Kolkata
      - Speak fluent, natural English.
      - **Numbers**: Use standard digits or words (e.g., "5:00 PM", "30 minutes"). The TTS reads these correctly in English.
    
-   - **HINDI MODE**:
-     - Speak fluent, conversational Hindi/Hinglish.
+    - **HINDI MODE (HINGLISH)**:
+      - **NO PURE/FORMAL HINDI**: Do NOT use complex words like "uplabdh", "prakriya", "pushti", "kripya", "avashyakta".
+      - **USE EVERYDAY LANGUAGE**: Talk like a normal Indian person in casual conversation.
+      - **KEEP ENGLISH TERMS**: Always use English words for: "Appointment", "Booking", "Service", "Time", "Date", "Phone number", "Available", "Confirm".
+        - ❌ "Kya yeh samay uplabdh hai?" -> ✅ "Kya yeh time available hai?"
+        - ❌ "Main aapki booking ki pushti karti hoon." -> ✅ "Main aapki booking confirm kar deti hoon."
+        - ❌ "Kripya apna phone number batayein." -> ✅ "Apna phone number bata dijiye please."
+      - Speak fluent, conversational Hindi/Hinglish.
      - **CRITICAL FOR NUMBERS**: You MUST TRANSLITERATE all numbers into Hindi words. The TTS reads digits in English, so you must write the Hindi pronunciation.
        - "1" -> "ek"
        - "2" -> "do"
        - "3" -> "teen"
-       - "5:00 PM" -> "shaam ke paanch baje"
+       - "5:00 PM" -> "paanch baje"
        - "15 mins" -> "pandrah minute"
        - "10th" -> "das-vi" or "das" depending on context.
        - "2 services" -> "do services"
      - **NEVER** output digits (e.g., "5") in Hindi mode. ALWAYS spell them out ("paanch").
+
+    - **DATE PRONUNCIATION (ALL MODES)**:
+      - **ALWAYS** speak dates naturally: "January 2nd", "2nd of Jan", "March 15th".
+      - **NEVER** speak ISO dates like "2024-01-02" or "02 Jan".
+      - If you see "2026-01-02", say "January 2nd".
+
+    - **PHONE NUMBER PRONUNCIATION**:
+      - **CONTINUOUS DIGITS**: Speak the digits in a single steady stream.
+      - **NO PAUSES**: Do NOT group digits. Do NOT add spaces.
+      - **FORMAT**: Output "9876543210" (Good). "98765 43210" (Bad - creates pause). "987-654..." (Bad).
+      - **IGNORE PREFIX**: If the number is "+919876543210", just say "9876543210".
 
 ### Upselling Related Services:
 **You should gently suggest related/complementary services to enhance the customer experience.**
@@ -559,7 +596,7 @@ Location: Asia/Kolkata
 
 6. **Confirmation**: After ALL info collected AND OTP verified, confirm:
    - **Before confirming, make your THIRD and FINAL related service suggestion (if needed and appropriate)**
-   - "Okay, so just to make sure I have this right... I'm booking [Service] on [date] at [time]... and I have your number as [phone]."
+   - "Okay, so just to make sure I have this right... I'm booking [Service] on [date] at [time]... and I have your number as [phone (digits only, no spaces)]."
    - Brief pause, then: "Should I go ahead and confirm that for you?"
 
 7. **EXECUTION**: When the user provides verbal confirmation (e.g. "yes", "go ahead"), you MUST call the `create_booking` tool immediately with the details collected. Do not ask more questions. JUST CALL THE TOOL.
@@ -602,9 +639,9 @@ Location: Asia/Kolkata
         **Tool-Specific Acknowledgments**:
         - Before `get_availability`: "Let me check that for you...", "One moment, checking our schedule..."
         - Before `check_available_days`: "Let me see when we're open...", "Checking our calendar..."
-        - Before `create_booking`: "Perfect, I am sending you the Booking details...", "Alright, I am sending you the Booking details..."
-        - Before `send_otp`: "Okay, sending the code to your email...", "Sure, I'll send that verification code..."
-        - Before `verify_otp`: "Let me verify that code...", "Checking..."
+        - Before `create_booking`: "Perfect, let me book that...", "Alright, putting that in the system..."
+        - Before `send_otp`: "Okay, sending the code now...", "Sending the email..."
+        - Before `verify_otp`: "Let me check that...", "Checking..."
         - Before `list_bookings`: "Let me pull up your bookings...", "One moment, checking your appointments..."
         - Before `cancel_booking`: "Alright, canceling that for you...", "Sure, let me cancel that appointment..."
         - Before `reschedule_booking`: "Okay, let me reschedule that...", "Perfect, moving your appointment..."
@@ -631,6 +668,10 @@ Location: Asia/Kolkata
         context: RunContext,
         email: Annotated[str, "User email address"],
     ):
+        """
+        Sends a verification email (OTP) to the specified email address.
+        Use this when the user provides their email or asks to send/receive the verification mail/code.
+        """
         from otp_service import generate_otp, hash_otp, send_otp_email, OTP_EXPIRY_MINUTES
 
         otp = generate_otp()
@@ -655,8 +696,8 @@ Location: Asia/Kolkata
         context.session.fsm.update_state(data={"email": email})
 
         return (
-            "Alright… I’ve sent a six-digit verification code to your email. "
-            "It’s valid for five minutes."
+            "Alright... I've sent the code to your email. "
+            "It's valid for five minutes."
         )
 
     @function_tool
@@ -664,6 +705,10 @@ Location: Asia/Kolkata
         self,
         context: RunContext,
     ):
+        """
+        Re-sends the verification email (OTP) to the user's previously provided email.
+        Use this if the user says they didn't get the mail, asks to send it again, or code expired.
+        """
         from otp_service import generate_otp, hash_otp, send_otp_email, OTP_EXPIRY_MINUTES, OTP_RESEND_COOLDOWN_SECONDS, OTP_MAX_RESENDS
         
         # Access FSM context attached to session
@@ -673,8 +718,8 @@ Location: Asia/Kolkata
         # ❌ Too many resends
         if fsm_ctx.otp_resend_count >= OTP_MAX_RESENDS:
             return (
-                "I’ve already sent the code a few times. "
-                "For security reasons, please try again after some time."
+                "I've sent the code a few times already. "
+                "maybe give it a few minutes before trying again?"
             )
 
         # ⏳ Cooldown check
@@ -704,6 +749,9 @@ Location: Asia/Kolkata
         context: RunContext,
         otp: Annotated[str, "6 digit code spoken by user"],
     ):
+        """
+        Verifies the OTP code provided by the user against the one sent to their email.
+        """
         from otp_service import hash_otp
         # Access FSM context attached to session
         fsm_ctx = context.session.fsm.ctx
@@ -719,8 +767,8 @@ Location: Asia/Kolkata
             # Update FSM state to move to booking confirmation
             context.session.fsm.update_state(intent="otp_success")
             return (
-                "Perfect. You’re verified now. "
-                "Let me confirm the booking details with you..."
+                "Perfect, that worked. "
+                "Let's just confirm the details..."
             )
 
         return (
@@ -775,7 +823,17 @@ Location: Asia/Kolkata
         """Capture the date the user wants to book."""
         # Store the date in FSM
         context.session.fsm.update_state(data={"date": date})
-        return f"Got it, {date}."
+        
+        # Try to format for natural speech response
+        try:
+            # Parse with dummy time to get date object
+            iso = parse_datetime(date, "12:00 PM")
+            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            dt_local = dt.astimezone(ZoneInfo("Asia/Kolkata"))
+            spoken_date = format_spoken_date(dt_local)
+            return f"Got it, {spoken_date}."
+        except:
+            return f"Got it, {date}."
 
     @function_tool
     async def input_time(
@@ -786,7 +844,21 @@ Location: Asia/Kolkata
         """Capture the time the user wants to book."""
         # Store the time in FSM
         context.session.fsm.update_state(data={"time": time})
-        return f"Okay, {time}."
+        
+        # Clean up response to be natural (remove "evening 5pm" -> "5pm")
+        response_time = time
+        if any(c.isdigit() for c in time):
+            import re
+            # Remove period words to avoid "evening 5 pm"
+            clean = time.lower()
+            for word in ["morning", "afternoon", "evening", "night", "in the", "at"]:
+                clean = clean.replace(word, "")
+            
+            clean = " ".join(clean.split())
+            if clean:
+                response_time = clean.upper()
+                
+        return f"Okay, {response_time}."
 
     @function_tool
     async def input_phone(
@@ -918,11 +990,11 @@ Location: Asia/Kolkata
                 dt_local = dt_utc.astimezone(ZoneInfo("Asia/Kolkata"))
                 now_local = datetime.now(ZoneInfo("Asia/Kolkata"))
                 if dt_local.date() < now_local.date():
-                    return "I can't book in the past. Please pick a future date within one week."
+                    return "I can't book in the past. Please pick a day within the next week."
                 if dt_local > (now_local + timedelta(days=7)):
-                    return "I can only book appointments up to 1 week from today. Please pick an earlier date."
+                    return "I can only book up to one week in advance. Please pick an earlier day."
             except Exception:
-                return "I couldn't understand that date — please provide a valid day within one week."
+                return "I didn't catch that date. Can you say a day within the next week?"
             
             # Create the booking
             payload = {
@@ -956,14 +1028,15 @@ Location: Asia/Kolkata
                     user_email = context.session.fsm.ctx.email or "guest@voice.ai"
                     send_booking_confirmation_email(user_email, service_info['title'], date, time)
                     
-                    return f"Your {service_info['title']} appointment has been confirmed for {date} at {time}. I have sent the email for the confirmed booking."
+                    spoken_date = format_spoken_date(dt_local)
+                    return f"Great! I've booked your {service_info['title']} for {spoken_date} at {time}. I've also sent the confirmation to your email."
                 else:
                     logger.error(f"Booking failed: {res.status_code} - {res.text}")
-                    return f"I couldn't book the {service_info['title']} appointment. Please try a different time slot."
+                    return f"I couldn't book the {service_info['title']} for that time. Should we try a different slot?"
 
         except Exception as e:
             logger.error(f"Booking error: {e}")
-            return "Booking failed. Please try again."
+            return "I had trouble booking that. Can we try again?"
 
     @function_tool
     async def get_availability(
@@ -991,10 +1064,10 @@ Location: Asia/Kolkata
             if dt.date() < now_local.date():
                 tomorrow = now_local + timedelta(days=1)
                 dt = tomorrow
-                note_prefix = f"(Showing availability for tomorrow: {dt.strftime('%Y-%m-%d')})\n"
+                note_prefix = f"(Showing availability for {format_spoken_date(dt)})\n"
 
             if dt > (now_local + timedelta(days=7)):
-                return "I can only book appointments up to 1 week from today. Please choose a date within one week."
+                return "I can only book up to a week in advance. Can we look at a day this week?"
 
             formatted_date = dt.strftime("%Y-%m-%d")
 
@@ -1283,10 +1356,10 @@ Location: Asia/Kolkata
                 uid = b["uid"]
                 start = b["start"]
                 title = b.get("title", "Appointment")
-                dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
                 dt_local = dt.astimezone(ZoneInfo("Asia/Kolkata"))
+                spoken_date = format_spoken_date(dt_local)
                 results.append(
-                    f"{title} on {dt_local.strftime('%B %d at %I:%M %p')} (ID: {uid})"
+                    f"{title} on {spoken_date} at {dt_local.strftime('%I:%M %p')} (ID: {uid})"
                 )
 
             return f"I found {len(results)} booking(s): " + "; ".join(results)
@@ -1320,14 +1393,14 @@ Location: Asia/Kolkata
                 )
                 
                 if response.status_code in [200, 201]:
-                    return "Your appointment has been cancelled successfully."
+                    return "Done. I've cancelled that appointment for you."
                 else:
                     logger.error(f"Cancel booking failed: {response.text}")
-                    return "I couldn't cancel that appointment. It might have already been cancelled."
+                    return "I couldn't cancel it. It might be already cancelled."
                     
         except Exception as e:
             logger.error(f"Error canceling booking: {str(e)}")
-            return "There was an issue canceling your appointment. Please try again."
+            return "I had trouble canceling that. Please try again."
 
 
 server = AgentServer()
@@ -1399,7 +1472,7 @@ async def my_agent(ctx: JobContext):
     )
 
     await ctx.connect()
-    await session.say("Hello! I am Zara Patel from TSC Salon. How may I help you today?", allow_interruptions=True)
+    await session.say("Hello! I'm Zara Patel from TSC Salon. How can I help you today?", allow_interruptions=True)
 
 
 if __name__ == "__main__":
