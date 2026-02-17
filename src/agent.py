@@ -1424,16 +1424,34 @@ server.setup_fnc = prewarm
 async def my_agent(ctx: JobContext):
     import json
 
+    # project_id = None
+
+    # if ctx.room.metadata:
+    #     try:
+    #         metadata = json.loads(ctx.room.metadata)
+    #         project_id = metadata.get("projectId")
+    #     except Exception:
+    #         pass
+
+    # print(f"[DEBUG] Project ID from metadata: {project_id}")
+
+    # Connect first so participants exist
+    await ctx.connect()
+
     project_id = None
 
-    if ctx.room.metadata:
-        try:
-            metadata = json.loads(ctx.room.metadata)
-            project_id = metadata.get("projectId")
-        except Exception:
-            pass
+    # Read metadata from connected participants
+    for participant in ctx.room.remote_participants.values():
+        if participant.metadata:
+            try:
+                metadata = json.loads(participant.metadata)
+                project_id = metadata.get("projectId")
+                break
+            except Exception as e:
+                print(f"[DEBUG] Failed to parse metadata: {e}")
 
-    print(f"[DEBUG] Project ID from metadata: {project_id}")
+    print(f"[DEBUG] Project ID from participant metadata: {project_id}")
+
 
     import httpx
 
@@ -1442,7 +1460,7 @@ async def my_agent(ctx: JobContext):
     if project_id:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{BACKEND_URL}/api/projects/{project_id}",
+                f"{BACKEND_URL}/api/internal/projects/{project_id}",
                 headers={
                     "Authorization": f"Bearer {VOICE_AGENT_SECRET}"
                 },
@@ -1542,7 +1560,7 @@ async def my_agent(ctx: JobContext):
         ),
     )
 
-    await ctx.connect()
+    # await ctx.connect()
     await session.say(agent_config.get("greeting", "Hello!"), allow_interruptions=True)
 
 
