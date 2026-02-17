@@ -45,6 +45,9 @@ CAL_COM_API_KEY = os.getenv("CAL_COM_API_KEY")
 CAL_COM_API_URL = "https://api.cal.com/v2"
 CAL_USERNAME = os.getenv("CAL_USERNAME")
 
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:3000")
+VOICE_AGENT_SECRET = os.getenv("VOICE_AGENT_SECRET")
+
 # Cache for event types (refreshed periodically)
 EVENT_TYPES_CACHE = {
     "data": [],
@@ -167,7 +170,7 @@ def parse_datetime(date_str: str, time_str: str, timezone: str = "Asia/Kolkata")
     Returns ISO 8601 string: 'YYYY-MM-DDTHH:MM:SS.000Z' in Asia/Kolkata.
     """
     date_clean = date_str.strip().lower()
-    time_clean = time_str.strip().lower()
+    time_clean = time_str.strip().lower()                                                               
     
     current_tz = ZoneInfo(timezone)
     now_in_tz = datetime.now(current_tz)
@@ -411,17 +414,22 @@ def setup_silence_detection(session, silence_monitor):
 
 
 class Assistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self, agent_config: dict) -> None:
         # Build dynamic instructions based on available services
         services = get_all_services()
         service_list = "\n".join([f"- **{s['title']}**: {s['duration']} minutes" for s in services])
         
         now = datetime.now(ZoneInfo("Asia/Kolkata"))
         today_str = now.strftime("%A, %d %B %Y")
+
+        agent_name = agent_config.get("agentName", "Default Agent")
+        business_name = agent_config.get("businessName", "Business")
+        greeting = agent_config.get("greeting", "Hello!")
+        industry = agent_config.get("industry", "Service")
         
         instructions = f"""
-        You are Zara Patel, the head receptionist at TSC Salon. You have a warm INDIAN ENGLISH accent. You manage salon appointments for customers.
-
+        You are {agent_name}, the head receptionist at {business_name}. You represent a {industry}.
+e
 Current Date: {today_str} (Year: {now.year})
 Location: Asia/Kolkata
 
@@ -467,6 +475,7 @@ Location: Asia/Kolkata
    - **ENGLISH MODE**:
      - Speak fluent, natural English.
      - **Numbers**: Use standard digits or words (e.g., "5:00 PM", "30 minutes"). The TTS reads these correctly in English.
+     - **PHONE NUMBERS**: ALWAYS speak phone numbers in English digits (e.g. "9 8 7..."). NEVER transliterate phone numbers to Hindi (e.g. NEVER say "nau aath saat") in English mode.
    
     - **HINDI MODE (HINGLISH)**:
       - **NO PURE/FORMAL HINDI**: Do NOT use complex words like "uplabdh", "prakriya", "pushti", "kripya", "avashyakta".
@@ -476,15 +485,12 @@ Location: Asia/Kolkata
         - ❌ "Main aapki booking ki pushti karti hoon." -> ✅ "Main aapki booking confirm kar deti hoon."
         - ❌ "Kripya apna phone number batayein." -> ✅ "Apna phone number bata dijiye please."
       - Speak fluent, conversational Hindi/Hinglish.
-     - **CRITICAL FOR NUMBERS**: You MUST TRANSLITERATE all numbers into Hindi words. The TTS reads digits in English, so you must write the Hindi pronunciation.
-       - "1" -> "ek"
-       - "2" -> "do"
-       - "3" -> "teen"
+     - **CRITICAL FOR NUMBERS (EXCEPT PHONE)**: For quantities, time, and dates, use Hindi words.
        - "5:00 PM" -> "paanch baje"
        - "15 mins" -> "pandrah minute"
-       - "10th" -> "das-vi" or "das" depending on context.
        - "2 services" -> "do services"
-     - **NEVER** output digits (e.g., "5") in Hindi mode. ALWAYS spell them out ("paanch").
+     - **PHONE NUMBERS**: ALWAYS speak phone numbers in English digits (e.g. "9 8 7..."). NEVER transliterate phone numbers to Hindi (e.g. NEVER say "nau aath saat") even in Hindi mode.
+     - **NEVER** output digits (e.g., "5") in Hindi mode for general numbers. ALWAYS spell them out ("paanch"). Phone numbers are the ONLY exception.
 
     - **DATE PRONUNCIATION (ALL MODES)**:
       - **ALWAYS** speak dates naturally: "January 2nd", "2nd of Jan", "March 15th".
@@ -649,6 +655,7 @@ Location: Asia/Kolkata
         **Rules**:
         - Keep acknowledgments SHORT (3-7 words)
         - Sound natural and conversational
+        - NEVER speak the name of the tool/function (e.g. NEVER say "Calling get_availability").
         - NEVER explain technical details like "calling the function" or "using the API"
         - Match the language the user is speaking (Hindi acknowledgments for Hindi speakers)
         
@@ -1415,9 +1422,73 @@ server.setup_fnc = prewarm
 
 @server.rtc_session()
 async def my_agent(ctx: JobContext):
+    import json
+
+    project_id = None
+
+    if ctx.room.metadata:
+        try:
+            metadata = json.loads(ctx.room.metadata)
+            project_id = metadata.get("projectId")
+        except Exception:
+            pass
+
+    print(f"[DEBUG] Project ID from metadata: {project_id}")
+
+    import httpx
+
+    agent_config = {}
+
+    if project_id:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{BACKEND_URL}/api/projects/{project_id}",
+                headers={
+                    "Authorization": f"Bearer {VOICE_AGENT_SECRET}"
+                },
+                timeout=10.0,
+            )
+
+            if response.status_code == 200:
+                agent_config = response.json()
+            else:
+                raise Exception(f"Failed to fetch agent config: {response.status_code}")
+
+    print(f"[DEBUG] Agent Config: {agent_config}")
+    voice_id = agent_config.get("voiceId","faf0731e-dfb9-4cfc-8119-259a79b27e12")
+    print(f"[DEBUG] Using voice_id: {voice_id}")
+
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
+    
+    # 🔍 PHASE 6: Print participant metadata (includes projectId from token)
+    logger.info(f"=" * 50)
+    logger.info(f"🎯 ROOM CONNECTED: {ctx.room.name}")
+    
+    # Wait for participants to connect (user joining the room)
+    await asyncio.sleep(1)  # Give time for participants to join
+    
+    # Print metadata from all participants
+    for participant in ctx.room.remote_participants.values():
+        logger.info(f"👤 Participant: {participant.identity}")
+        logger.info(f"📦 Metadata: {participant.metadata}")
+        
+        # Parse metadata JSON if available
+        if participant.metadata:
+            try:
+                import json
+                metadata_dict = json.loads(participant.metadata)
+                logger.info(f"🔑 projectId: {metadata_dict.get('projectId', 'NOT FOUND')}")
+                logger.info(f"🤖 agentName: {metadata_dict.get('agentName', 'NOT FOUND')}")
+                logger.info(f"🏢 businessName: {metadata_dict.get('businessName', 'NOT FOUND')}")
+                logger.info(f"👥 userId: {metadata_dict.get('userId', 'NOT FOUND')}")
+                logger.info(f"👥 voiceId: {metadata_dict.get('voiceId', 'NOT FOUND')}")
+
+            except Exception as e:
+                logger.error(f"Failed to parse metadata: {e}")
+    
+    logger.info(f"=" * 50)
     
     # Fetch event types on startup
     await fetch_event_types()
@@ -1438,7 +1509,7 @@ async def my_agent(ctx: JobContext):
         llm=inference.LLM(model="openai/gpt-4.1-mini"),
         # llm=groq.LLM(model="openai/gpt-oss-20b"),
         tts=inference.TTS(
-            model="cartesia/sonic-3", voice="2b035a4d-c001-49a7-8505-f050c4250d97"
+            model="cartesia/sonic-3", voice=voice_id
         ),
         # tts=resemble.TTS(
         #     voice_uuid="c99f388c",
@@ -1460,7 +1531,7 @@ async def my_agent(ctx: JobContext):
     setup_silence_detection(session, silence_monitor)
 
     await session.start(
-        agent=Assistant(),
+        agent=Assistant(agent_config),
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
@@ -1472,7 +1543,7 @@ async def my_agent(ctx: JobContext):
     )
 
     await ctx.connect()
-    await session.say("Hello! I'm Zara Patel from TSC Salon. How can I help you today?", allow_interruptions=True)
+    await session.say(agent_config.get("greeting", "Hello!"), allow_interruptions=True)
 
 
 if __name__ == "__main__":
