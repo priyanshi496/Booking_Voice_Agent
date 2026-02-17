@@ -429,7 +429,7 @@ class Assistant(Agent):
         
         instructions = f"""
         You are {agent_name}, the head receptionist at {business_name}. You represent a {industry}.
-e
+
 Current Date: {today_str} (Year: {now.year})
 Location: Asia/Kolkata
 
@@ -1363,6 +1363,7 @@ Location: Asia/Kolkata
                 uid = b["uid"]
                 start = b["start"]
                 title = b.get("title", "Appointment")
+                dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
                 dt_local = dt.astimezone(ZoneInfo("Asia/Kolkata"))
                 spoken_date = format_spoken_date(dt_local)
                 results.append(
