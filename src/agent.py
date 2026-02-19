@@ -29,7 +29,7 @@ from livekit.agents import (
     room_io,
     AgentStateChangedEvent, UserStateChangedEvent, FunctionToolsExecutedEvent
 )
-from livekit.plugins import noise_cancellation, silero, openai,groq,resemble
+from livekit.plugins import noise_cancellation, silero, openai, groq, resemble, deepgram
 
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from otp_service import generate_otp, hash_otp, send_otp_email
@@ -413,6 +413,71 @@ def setup_silence_detection(session, silence_monitor):
             silence_monitor.stop_waiting()
 
 
+import random
+
+class FillerAudioManager:
+    """Plays instant filler phrases before tool calls to eliminate dead silence."""
+
+    FILLER_PHRASES = {
+        "checking": [
+            "One moment...",
+            "Let me check that...",
+            "Give me a second...",
+            "Just a sec...",
+            "Let me see...",
+        ],
+        "booking": [
+            "Alright, booking that now...",
+            "Perfect, let me put that in...",
+            "Sure, setting that up...",
+        ],
+        "sending": [
+            "Okay, sending that now...",
+            "Sure, on it...",
+            "Sending right away...",
+        ],
+        "verifying": [
+            "Let me check that code...",
+            "One moment...",
+            "Checking that for you...",
+        ],
+        "cancelling": [
+            "Sure, cancelling that now...",
+            "Alright, on it...",
+            "Let me take care of that...",
+        ],
+        "generic": [
+            "One moment...",
+            "Just a second...",
+            "Let me handle that...",
+            "Sure thing...",
+            "On it...",
+        ],
+    }
+
+    def __init__(self, session):
+        self.session = session
+        self._used: dict[str, list[str]] = {}
+
+    def _pick(self, category: str) -> str:
+        """Pick a non-repeating phrase from a category."""
+        pool = self.FILLER_PHRASES.get(category, self.FILLER_PHRASES["generic"])
+        used = self._used.get(category, [])
+        available = [p for p in pool if p not in used]
+        if not available:
+            available = pool
+            self._used[category] = []
+        phrase = random.choice(available)
+        self._used.setdefault(category, []).append(phrase)
+        return phrase
+
+    async def play(self, category: str = "generic"):
+        """Play a filler phrase immediately — non-blocking."""
+        phrase = self._pick(category)
+        logger.debug(f"[Filler] Playing: {phrase}")
+        await self.session.say(phrase, allow_interruptions=True)
+
+
 class Assistant(Agent):
     def __init__(self, agent_config: dict) -> None:
         # Build dynamic instructions based on available services
@@ -634,45 +699,19 @@ Location: Asia/Kolkata
 
 **Starting responses**: "Okay...", "Alright...", "Sure...", "Got it..."
 
-**Checking information**: "Let me see...", "One moment...", "Let me pull that up..."
-
 **Confirming**: "Perfect...", "Great...", "Sounds good..."
 
 **Transitions**: "And...", "So...", "Now..."
 
 **Upselling naturally**: "By the way...", "Oh, and...", "Just a thought...", "A lot of people also..."
 
-**Example - Instead of listing services**: "What service would you like? (Do NOT list options)"
-
 **Say naturally**: "So... what service are you looking for today?"
+
+**CRITICAL - NO FILLER BEFORE TOOL CALLS**: Do NOT say "Let me check", "One moment", "Let me see", "Let me pull that up", or ANY similar phrase before calling a tool. The system handles this automatically. Just call the tool silently and immediately.
 
 ---
 
-### 🔧 TOOL CALLING ETIQUETTE (ADD THIS SECTION HERE)
-        **IMPORTANT**: Before calling ANY tool/function, ALWAYS speak a brief, natural acknowledgment first:
-        
-        **Tool-Specific Acknowledgments**:
-        - Before `get_availability`: "Let me check that for you...", "One moment, checking our schedule..."
-        - Before `check_available_days`: "Let me see when we're open...", "Checking our calendar..."
-        - Before `create_booking`: "Perfect, let me book that...", "Alright, putting that in the system..."
-        - Before `send_otp`: "Okay, sending the code now...", "Sending the email..."
-        - Before `verify_otp`: "Let me check that...", "Checking..."
-        - Before `list_bookings`: "Let me pull up your bookings...", "One moment, checking your appointments..."
-        - Before `cancel_booking`: "Alright, canceling that for you...", "Sure, let me cancel that appointment..."
-        - Before `reschedule_booking`: "Okay, let me reschedule that...", "Perfect, moving your appointment..."
-        
-        **Rules**:
-        - Keep acknowledgments SHORT (3-7 words)
-        - Sound natural and conversational
-        - NEVER speak the name of the tool/function (e.g. NEVER say "Calling get_availability").
-        - NEVER explain technical details like "calling the function" or "using the API"
-        - Match the language the user is speaking (Hindi acknowledgments for Hindi speakers)
-        
-        **Examples**:
-        ✓ User: "Check availability tomorrow" → You: "Let me check... [calls get_availability]"
-        ✓ User: "Book it" → You: "Perfect, booking that now... [calls create_booking]"
-        ✗ User: "Check slots" → You: [silently calls tool] ← DON'T DO THIS
-        ✗ User: "Book it" → You: "I will now call the create_booking function" ← DON'T DO THIS
+
 
 **Remember: You're a friendly salon receptionist having a natural conversation. Use pauses, think out loud briefly, keep it conversational, and gently suggest related services (max 2-3 times) to enhance their experience.**
 """
@@ -688,6 +727,7 @@ Location: Asia/Kolkata
         Sends a verification email (OTP) to the specified email address.
         Use this when the user provides their email or asks to send/receive the verification mail/code.
         """
+        await context.session.filler.play("sending")
         from otp_service import generate_otp, hash_otp, send_otp_email, OTP_EXPIRY_MINUTES
 
         otp = generate_otp()
@@ -725,6 +765,7 @@ Location: Asia/Kolkata
         Re-sends the verification email (OTP) to the user's previously provided email.
         Use this if the user says they didn't get the mail, asks to send it again, or code expired.
         """
+        await context.session.filler.play("sending")
         from otp_service import generate_otp, hash_otp, send_otp_email, OTP_EXPIRY_MINUTES, OTP_RESEND_COOLDOWN_SECONDS, OTP_MAX_RESENDS
         
         # Access FSM context attached to session
@@ -768,6 +809,7 @@ Location: Asia/Kolkata
         """
         Verifies the OTP code provided by the user against the one sent to their email.
         """
+        await context.session.filler.play("verifying")
         from otp_service import hash_otp
         # Access FSM context attached to session
         fsm_ctx = context.session.fsm.ctx
@@ -985,6 +1027,7 @@ Location: Asia/Kolkata
         service: Annotated[str, "Service title exactly as user mentioned"],
     ):
         """Create a new booking for the specified service."""
+        await context.session.filler.play("booking")
         try:
             # Find the service
             service_info = find_service_by_name(service)
@@ -1063,6 +1106,7 @@ Location: Asia/Kolkata
         period: Annotated[str, "Optional: morning|afternoon|evening"] = "",
     ):
         """Check availability for a specific service on a given date."""
+        await context.session.filler.play("checking")
         try:
             # Find the service
             service_info = find_service_by_name(service)
@@ -1175,6 +1219,7 @@ Location: Asia/Kolkata
         Finds the nearest upcoming days that have availability. 
         Use this when the user asks "When are you available?" or "Which days do you have connected?" without specifying a date.
         """
+        await context.session.filler.play("checking")
         try:
             # Find the service
             service_info = find_service_by_name(service)
@@ -1267,6 +1312,7 @@ Location: Asia/Kolkata
         service: Annotated[str, "Service title for the rescheduled booking"],
     ):
         """Reschedule an existing booking to a new date and time."""
+        await context.session.filler.play("booking")
         try:
             # Cancel existing booking
             async with httpx.AsyncClient() as client:
@@ -1337,6 +1383,7 @@ Location: Asia/Kolkata
         phone_number: Annotated[str, "Phone number used for booking"],
     ):
         """List all upcoming bookings for a phone number."""
+        await context.session.filler.play("checking")
         try:
             target_phone = normalize_phone(phone_number)
 
@@ -1393,6 +1440,7 @@ Location: Asia/Kolkata
         cancellation_reason: Annotated[str, "Reason for cancellation"] = "User requested cancellation",
     ):
         """Cancel an existing booking."""
+        await context.session.filler.play("cancelling")
         try:
             logger.info(f"Canceling booking: {booking_uid}")
             
@@ -1530,9 +1578,15 @@ async def my_agent(ctx: JobContext):
         # stt=inference.STT(model="cartesia/ink-whisper",
         #  language="en"
         # ),
-        stt=groq.STT(
-            model="whisper-large-v3",
-            detect_language=True,
+        stt=deepgram.STT(
+            model="nova-2-general",
+            language="en-IN",
+            smart_format=True,
+            no_delay=True,
+            endpointing_ms=25,
+            interim_results=True,
+            punctuate=True,
+            filler_words=True,
         ),
         llm=inference.LLM(model="openai/gpt-4.1-mini"),
         # llm=groq.LLM(model="openai/gpt-oss-20b"),
@@ -1550,6 +1604,9 @@ async def my_agent(ctx: JobContext):
     
     # Attach FSM to session for access in tools
     session.fsm = fsm_instance
+
+    filler_manager = FillerAudioManager(session)
+    session.filler = filler_manager
 
     # sneeze_manager = SneezeManager(session)
     # session.sneeze_manager = sneeze_manager
