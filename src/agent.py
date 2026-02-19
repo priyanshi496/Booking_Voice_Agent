@@ -48,6 +48,29 @@ CAL_USERNAME = os.getenv("CAL_USERNAME")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:3000")
 VOICE_AGENT_SECRET = os.getenv("VOICE_AGENT_SECRET")
 
+# Phone-to-Email mapping
+PHONE_EMAIL_MAP = {
+    "1234567890": "yashshah28072004@gmail.com",
+    "9876543210": "haritramanuj.apps@gmail.com",
+    "9876543211": "malharsevak03@gmail.com",
+    "9876543212": "priyanshimodi21@gmail.com",
+}
+DEFAULT_EMAIL = "haritramanuj.apps@gmail.com"
+
+
+def lookup_email_by_phone(phone: str) -> str:
+    """Look up email mapped to a phone number. Falls back to DEFAULT_EMAIL."""
+    if not phone:
+        logger.warning("lookup_email_by_phone called with empty phone, using default")
+        return DEFAULT_EMAIL
+    # Extract last 10 digits for matching (strip +91 or any prefix)
+    digits = "".join(filter(str.isdigit, phone))
+    last_10 = digits[-10:] if len(digits) >= 10 else digits
+    email = PHONE_EMAIL_MAP.get(last_10, DEFAULT_EMAIL)
+    logger.info(f"Phone lookup: {phone} -> digits={last_10} -> {email}")
+    return email
+
+
 # Cache for event types (refreshed periodically)
 EVENT_TYPES_CACHE = {
     "data": [],
@@ -721,39 +744,36 @@ Location: Asia/Kolkata
     async def send_otp(
         self,
         context: RunContext,
-        email: Annotated[str, "User email address"],
     ):
         """
-        Sends a verification email (OTP) to the specified email address.
-        Use this when the user provides their email or asks to send/receive the verification mail/code.
+        Sends a verification email (OTP) to the email mapped to the user's phone number.
+        The email is auto-determined — never ask the user for it.
         """
         await context.session.filler.play("sending")
         from otp_service import generate_otp, hash_otp, send_otp_email, OTP_EXPIRY_MINUTES
 
         otp = generate_otp()
-        
-        # Access FSM context attached to session
         fsm_ctx = context.session.fsm.ctx
+
+        # Auto-lookup email from phone
+        email = lookup_email_by_phone(fsm_ctx.phone or "")
+        if not email or email == "None":
+            email = DEFAULT_EMAIL
 
         fsm_ctx.email = email
         fsm_ctx.otp_hash = hash_otp(otp)
         fsm_ctx.otp_expiry = datetime.now(ZoneInfo("UTC")) + timedelta(minutes=OTP_EXPIRY_MINUTES)
         fsm_ctx.otp_last_sent_at = datetime.now(ZoneInfo("UTC"))
-        fsm_ctx.otp_resend_count = 0   # reset on fresh OTP
+        fsm_ctx.otp_resend_count = 0
 
         send_otp_email(email, otp)
+        logger.info(f"OTP sent to {email} (mapped from phone {fsm_ctx.phone})")
 
-        # # TRIGGER THE SNEEZE after OTP is sent
-        # if hasattr(context.session, 'sneeze_manager'):
-        #     context.session.sneeze_manager.trigger_sneeze()
-
-        
-        # Update FSM state to OTP_VERIFY so agent knows we're waiting for code
         context.session.fsm.update_state(data={"email": email})
 
         return (
-            "Alright... I've sent the code to your email. "
-            "It's valid for five minutes."
+            "I've sent a verification code to your registered email. "
+            "It's valid for five minutes. What's the 6-digit code?"
         )
 
     @function_tool
@@ -792,6 +812,12 @@ Location: Asia/Kolkata
         fsm_ctx.otp_expiry = now + timedelta(minutes=OTP_EXPIRY_MINUTES)
         fsm_ctx.otp_last_sent_at = now
         fsm_ctx.otp_resend_count += 1
+
+        # Ensure email is present (auto-lookup if missing)
+        if not fsm_ctx.email or fsm_ctx.email == "None":
+            fsm_ctx.email = lookup_email_by_phone(fsm_ctx.phone or "")
+        if not fsm_ctx.email or fsm_ctx.email == "None":
+            fsm_ctx.email = DEFAULT_EMAIL
 
         send_otp_email(fsm_ctx.email, otp)
 
@@ -927,11 +953,16 @@ Location: Asia/Kolkata
         """Capture the user's phone number."""
         # Normalize and store
         normalized = normalize_phone(phone)
+        
+        # Force-set phone on context (don't rely solely on FSM transition)
+        fsm_ctx = context.session.fsm.ctx
+        fsm_ctx.phone = normalized
+        
+        # Try FSM state transition
         context.session.fsm.update_state(data={"phone": normalized})
         
-        # For manage flow, also fetch bookings
-        if context.session.fsm.state == State.MANAGE_ASK_PHONE:
-            # Fetch bookings for this phone
+        # For manage flow, fetch bookings
+        if context.session.fsm.state == State.MANAGE_ASK_PHONE or fsm_ctx.intent in ["cancel", "update", "reschedule", "cancel_all"]:
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.get(
@@ -967,6 +998,33 @@ Location: Asia/Kolkata
                 logger.error(f"Error fetching bookings: {e}")
                 return "Got your phone number."
         
+        # For booking flow: auto-lookup email and send OTP
+        # Check intent directly (not FSM state) to handle parallel tool call race condition
+        if fsm_ctx.intent == "book" and not fsm_ctx.email:
+            from otp_service import generate_otp, hash_otp, send_otp_email, OTP_EXPIRY_MINUTES
+
+            email = lookup_email_by_phone(normalized)
+            if not email or email == "None":
+                email = DEFAULT_EMAIL
+
+            otp = generate_otp()
+            fsm_ctx.email = email
+            fsm_ctx.otp_hash = hash_otp(otp)
+            fsm_ctx.otp_expiry = datetime.now(ZoneInfo("UTC")) + timedelta(minutes=OTP_EXPIRY_MINUTES)
+            fsm_ctx.otp_last_sent_at = datetime.now(ZoneInfo("UTC"))
+            fsm_ctx.otp_resend_count = 0
+
+            send_otp_email(email, otp)
+            logger.info(f"Auto-sent OTP to {email} (from phone {normalized})")
+
+            # Force FSM to OTP_VERIFY state
+            context.session.fsm.state = State.OTP_VERIFY
+
+            return (
+                "Got your number! I've sent a verification code to your registered email. "
+                "What's the 6-digit code?"
+            )
+
         return "Got your phone number."
 
     @function_tool
@@ -1069,6 +1127,8 @@ Location: Asia/Kolkata
                 "metadata": {"title": service_info["title"]},
             }
             
+            logger.info(f"Booking payload: {payload}")
+            
             async with httpx.AsyncClient() as client:
                 res = await client.post(
                     f"{CAL_COM_API_URL}/bookings",
@@ -1090,7 +1150,9 @@ Location: Asia/Kolkata
                     spoken_date = format_spoken_date(dt_local)
                     return f"Great! I've booked your {service_info['title']} for {spoken_date} at {time}. I've also sent the confirmation to your email."
                 else:
-                    logger.error(f"Booking failed: {res.status_code} - {res.text}")
+                    error_text = res.text
+                    logger.error(f"Booking failed: {res.status_code} - FULL RESPONSE: {error_text}")
+                    logger.error(f"Booking payload was: {payload}")
                     return f"I couldn't book the {service_info['title']} for that time. Should we try a different slot?"
 
         except Exception as e:
