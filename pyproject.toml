@@ -13,6 +13,7 @@ dependencies = [
     "livekit-agents[google,groq,inworld,openai,resemble,silero,turn-detector]~=1.3",
     "livekit-plugins-noise-cancellation~=0.2",
     "livekit-plugins-cartesia",
+    "livekit-plugins-deepgram",
     "python-dotenv",
     "google-api-python-client",
     "google-auth",

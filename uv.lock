@@ -25,6 +25,8 @@ dependencies = [
     { name = "livekit-agents", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, extra = ["google", "groq", "inworld", "openai", "resemble", "silero", "turn-detector"], marker = "python_full_version >= '3.10'" },
     { name = "livekit-plugins-cartesia", version = "1.3.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "livekit-plugins-cartesia", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "livekit-plugins-deepgram", version = "1.3.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "livekit-plugins-deepgram", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "livekit-plugins-noise-cancellation" },
     { name = "python-dateutil" },
     { name = "python-dotenv" },
@@ -51,6 +53,7 @@ requires-dist = [
     { name = "httpx" },
     { name = "livekit-agents", extras = ["google", "groq", "inworld", "openai", "resemble", "silero", "turn-detector"], specifier = "~=1.3" },
     { name = "livekit-plugins-cartesia" },
+    { name = "livekit-plugins-deepgram" },
     { name = "livekit-plugins-noise-cancellation", specifier = "~=0.2" },
     { name = "python-dateutil" },
     { name = "python-dotenv" },
@@ -1714,6 +1717,42 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c3/73/ead971ab4c9d79f498471b5238c35360037e84d7deca7cf5e3aa8045f41d/livekit_plugins_cartesia-1.3.9.tar.gz", hash = "sha256:b9fe6d54b8bc6be76efc9009f7c411a09cc1b97af13008d9d628016979d41159", size = 12516, upload-time = "2025-12-19T06:26:08.439Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/29/26972424213cea7fedcee07ddab7bc19c9d8fbc4fec6ee84ec2157897e91/livekit_plugins_cartesia-1.3.9-py3-none-any.whl", hash = "sha256:dd14f367d209cd796eb124ba4cb02d657afea438bcd1e6e24f50319a0e8f6551", size = 15482, upload-time = "2025-12-19T06:26:07.635Z" },
+]
+
+[[package]]
+name = "livekit-plugins-deepgram"
+version = "1.3.6"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.10'",
+]
+dependencies = [
+    { name = "livekit-agents", version = "1.3.6", source = { registry = "https://pypi.org/simple" }, extra = ["codecs"], marker = "python_full_version < '3.10'" },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b5/81/db8c96cb775e2512a0d822b20865e45aca144c438e9a3fa4cb824cfe5705/livekit_plugins_deepgram-1.3.6.tar.gz", hash = "sha256:39df68a4e8dbd4bbf09b09263c1f935b0a26927830214fcb5e3c6e019c2eb880", size = 15291, upload-time = "2025-12-03T19:09:47.105Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/b8/abbbb715e6ace49d224a7803f7742f2bc91fa1ff93df40a47d7ae2126433/livekit_plugins_deepgram-1.3.6-py3-none-any.whl", hash = "sha256:37388f217cc2394453cf7eaf6ba710c3531f411fd4fff0de2ad6f99830a16182", size = 21193, upload-time = "2025-12-03T19:09:46.218Z" },
+]
+
+[[package]]
+name = "livekit-plugins-deepgram"
+version = "1.3.9"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14'",
+    "python_full_version == '3.13.*'",
+    "python_full_version >= '3.11' and python_full_version < '3.13'",
+    "python_full_version == '3.10.*'",
+]
+dependencies = [
+    { name = "livekit-agents", version = "1.3.9", source = { registry = "https://pypi.org/simple" }, extra = ["codecs"], marker = "python_full_version >= '3.10'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7f/5f/eee4629f1a4cda408e3cb342a4f7a4297c33d76e29038ecc41e38b4d0612/livekit_plugins_deepgram-1.3.9.tar.gz", hash = "sha256:d8be018cb26da42a860b16fcac1eb8f6966eb99d8df363b630c407d7255d55c8", size = 16038, upload-time = "2025-12-19T06:26:12.854Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4a/64/76e1adefa942a8292c4029cc7bfa3e64aaa61c32d016c7c7a51cca872b5e/livekit_plugins_deepgram-1.3.9-py3-none-any.whl", hash = "sha256:086dea3c7c4aa3a5b5851cac5e5b875fb6a596381db1eabff1187a911acf5659", size = 21476, upload-time = "2025-12-19T06:26:11.715Z" },
 ]
 
 [[package]]
