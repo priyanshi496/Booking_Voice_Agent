@@ -112,10 +112,10 @@ class FSM:
 
         # OTP Verification
         if self.state == State.OTP_ASK_EMAIL:
+            # This state is skipped in normal flow (email auto-determined from phone)
             return base + (
-                "Ask for the user's email address. "
-                "Once provided, SPELL IT OUT character-by-character (e.g. 'a-b-c-@-g-m-a-i-l-.-c-o-m') to verify. "
-                "Ask 'Is that correct?'. Only after the user confirms 'yes', call `send_otp`."
+                "A verification code has been sent to the user's registered email. "
+                "Ask them to say the 6-digit code."
             )
 
         if self.state == State.OTP_SENT:
@@ -184,9 +184,10 @@ class FSM:
             
         elif self.state == State.BOOKING_ASK_PHONE and "phone" in data:
             self.ctx.phone = data["phone"]
-            self.state = State.OTP_ASK_EMAIL
+            # Skip OTP_ASK_EMAIL - email is auto-determined from phone
+            self.state = State.OTP_VERIFY
             
-        # OTP FLOW
+        # OTP FLOW (OTP_ASK_EMAIL kept for safety but skipped in normal flow)
         elif self.state == State.OTP_ASK_EMAIL and "email" in data:
             self.ctx.email = data["email"]
             self.state = State.OTP_VERIFY
